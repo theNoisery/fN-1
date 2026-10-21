@@ -5,13 +5,23 @@
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
 
-// Global sample pointer shared across granular voices
-static const int16_t *global_sample_buffer = NULL;
-static uint32_t global_sample_length = 0;
+static const int16_t *global_samples[16] = {NULL};
+static uint32_t global_lengths[16] = {0};
+static uint8_t active_sample_slot = 0;
 
-void granular_global_sample_set(const int16_t *buffer, uint32_t length) {
-    global_sample_buffer = buffer;
-    global_sample_length = length;
+void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length) {
+    if (slot < 16) {
+        global_samples[slot] = buffer;
+        global_lengths[slot] = length;
+    }
+}
+
+void granular_set_active_slot(uint8_t slot) {
+    if (slot < 16) active_sample_slot = slot;
+}
+
+uint8_t granular_get_active_slot(void) {
+    return active_sample_slot;
 }
 
 void granular_init(void *state_ptr, uint32_t sample_rate) {
@@ -52,11 +62,8 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
     memset(out_l, 0, frames * sizeof(int16_t));
     memset(out_r, 0, frames * sizeof(int16_t));
 
-    // Pull from global sample pool if not locally set
-    if (!state->sample_buffer && global_sample_buffer) {
-        state->sample_buffer = global_sample_buffer;
-        state->sample_length = global_sample_length;
-    }
+    state->sample_buffer = global_samples[active_sample_slot];
+    state->sample_length = global_lengths[active_sample_slot];
 
     if (!state->sample_buffer || state->sample_length == 0) return;
 
