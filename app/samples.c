@@ -40,7 +40,11 @@ static void unbind(void)
     groove_samples_stop();
     for (unsigned i = 0; i < SAMPLE_DRUM_PADS; ++i)
         (void)sampledrum_bind(i, NULL, 0, 0, NULL);
-    granular_global_sample_set(NULL, 0);
+        
+    for (unsigned i = 0; i < 16; ++i) {
+        granular_global_sample_set(i, NULL, 0);
+    }
+    
     fm1_engine_resume();
 }
 static int valid(void)
@@ -88,11 +92,13 @@ static int bind(void)
         (void)sampledrum_bind(i, s->frames ? mapped + s->offset : NULL, s->bytes, s->frames,
                               s->name);
     }
-    const struct sample_entry *s0 = &header.entry[0];
-    if (s0->frames) {
-        granular_global_sample_set((const int16_t *)(mapped + s0->offset), s0->frames);
-    } else {
-        granular_global_sample_set(NULL, 0);
+   for (unsigned i = 0; i < 16; ++i) {
+        const struct sample_entry *s = &header.entry[i];
+        if (s->frames) {
+            granular_global_sample_set(i, (const int16_t *)(mapped + s->offset), s->frames);
+        } else {
+            granular_global_sample_set(i, NULL, 0);
+        }
     }
     fm1_engine_resume();
     state = 2;
