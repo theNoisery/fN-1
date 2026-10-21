@@ -4,7 +4,8 @@
 #include <string.h>
 
 // Import the firmware's native ADPCM quantization table
-extern const int16_t sample_dqt[];
+//extern const int16_t sample_dqt[];
+#include "../sea_encode.h"
 
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
