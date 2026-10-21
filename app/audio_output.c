@@ -47,13 +47,20 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     int granular_active = 0;
     unsigned gran_vol = 0;
     
+    // Read the physical keyboard state
+    struct fm1_controls controls;
+    fm1_controls_read(&controls);
+    
     for (unsigned t = 0; t < GROOVE_TRACKS; ++t) {
         if (groove_source_type(t) == GROOVE_GRANULAR) {
             granular_active = 1;
             struct groove_view view;
             groove_get_view(t, 0, &view);
-            // Read native track envelope and apply to Granular volume
-            if (view.audible && view.level > 0) gran_vol = view.level;
+            
+            // Gate the audio: Only open the volume if a key is currently held down
+            if (controls.keys > 0) {
+                gran_vol = view.volume; 
+            }
             break;
         }
     }
@@ -67,6 +74,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
         if (usb_frames == FM1_BLOCK_FRAMES)
             value += ((int64_t)usb_pcm[i] * ((i & 1U) ? right : left)) >> 7;
             
+        // Splice the grains into the final output mix, scaled by our key gate
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
             value += ((int64_t)gran_sample * gran_vol * output_gain) >> 13; 
