@@ -854,7 +854,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
     unsigned type = groove_source_type(track), part = tone_part(),
              pg = page == FM_ENV ? 0 : tone_pages[track][tone_slot()];
     const struct groove_view view = frame_views[track];
-    uint32_t title = track | (part << 3) | (pg << 7) | (type << 12) | (view.mono << 16);
+    uint32_t title = track | (part << 3) | (pg << 7) | (type << 12) | (view.mono << 16) | (page << 17);
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(0, 32, 240, 163, BACK);
@@ -871,14 +871,14 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         number(156, 38, track + 1, 1, 1, colors[track], BACK);
         number(192, 38, pg + 1, 1, 1, TEXT, BACK);
         text(198, 38, "/", 1, DIM, BACK);
-        number(204, 38, page == FM_ENV ? 1 : (groove_tone_count(track, part) + 3) / 4, 1, 1, TEXT, BACK);
+        number(204, 38, page == FM_ENV ? 1 : type == GROOVE_GRANULAR ? 2 : (groove_tone_count(track, part) + 3) / 4, 1, 1, TEXT, BACK);
         static const char *const pages[] = {"FILTER", "OSCILLATOR / LEVEL", "DRIVE / SLIDE"};
         text(8, 56,
              page == FM_ENV && !groove_pad_count(track) ? source_names[type]
              : type == GROOVE_PSG                       ? "8 VOICES  YM / AY CHIPS"
              : type == GROOVE_PLUCK                     ? "8 VOICES  KARPLUS STRONG"
              : type == GROOVE_303                       ? pages[pg]
-             : type == GROOVE_GRANULAR                  ? "GRAIN CLOUD PARAMS"
+             : type == GROOVE_GRANULAR                  ? (pg ? "MULTIMODE FILTER" : "GRAIN CLOUD PARAMS")
              : type == GROOVE_808 && part == GROOVE_DRUMS ? "KIT SETTINGS"
                                                         : groove_pad_name(track, part),
              1, TEXT, BACK);
@@ -889,38 +889,85 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_303
                  ? (view.mono ? "MONO SLIDE  MONO/POLY KEYS" : "POLY 4      MONO/POLY KEYS")
              : type == GROOVE_SAMPLE ? "8 WHITE KEYS PLAY / SELECT"
-             : type == GROOVE_GRANULAR ? "KEYS PLAY  MACROS K1-K4"
+             : type == GROOVE_GRANULAR ? "ALGO PAGE  SELECT SLOT  K1-K4"
                                      : page == FM_ENV ? "PRESETS DRUM  KEYS PLAY" : "PRESETS DRUM / KIT  KEYS PLAY",
              1, DIM, BACK);
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
-    
-// Draw horizontal parameter bars for Granular 
+
+    // Draw horizontal parameter bars for Granular (Cloud, Filter, and Master ADSR)
     if (type == GROOVE_GRANULAR) {
-        static const char *const labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
-        int max_vals[] = {1023, 4000, 200, 1023};
-        
-        // Clear background and show current sample slot properly
-        paint_fill(150, 56, 90, 8, BACK); 
+        paint_fill(150, 56, 90, 8, BACK);
         text(150, 56, "SAMPLE SLOT:", 1, DIM, BACK);
         number(226, 56, granular_get_active_slot() + 1, 1, 1, TEXT, BACK);
-        
+
+        static const char *const filter_modes[] = {"OFF", "LPF", "BPF", "HPF"};
+
         for (unsigned i = 0; i < 4; ++i) {
-            int val = i == 0 ? granular_state.macro_scan : i == 1 ? granular_state.macro_size : i == 2 ? granular_state.macro_density : granular_state.macro_spray;
+            const char *lbl = "";
+            char val_str[12] = "";
+            unsigned bar_val = 0, bar_max = 100;
+
+            if (page == FM_ENV) {
+                static const char *const env_labels[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
+                uint8_t raw = i == 0 ? granular_state.env_attack : i == 1 ? granular_state.env_decay : i == 2 ? granular_state.env_sustain : granular_state.env_release;
+                lbl = env_labels[i];
+                bar_val = (raw * 100U + 63U) / 127U;
+                bar_max = 100U;
+                decimal(val_str, (int)bar_val, 1);
+                strcat(val_str, "%");
+            } else if (pg == 1) {
+                static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "-"};
+                lbl = filt_labels[i];
+                if (i == 0) {
+                    strcpy(val_str, filter_modes[granular_state.filter_mode & 3U]);
+                    bar_val = granular_state.filter_mode & 3U;
+                    bar_max = 3U;
+                } else if (i == 1) {
+                    bar_val = (granular_state.filter_cutoff * 100U + 63U) / 127U;
+                    bar_max = 100U;
+                    decimal(val_str, (int)bar_val, 1);
+                    strcat(val_str, "%");
+                } else if (i == 2) {
+                    bar_val = (granular_state.filter_res * 100U + 63U) / 127U;
+                    bar_max = 100U;
+                    decimal(val_str, (int)bar_val, 1);
+                    strcat(val_str, "%");
+                } else {
+                    strcpy(val_str, "--");
+                    bar_val = 0;
+                    bar_max = 1U;
+                }
+            } else {
+                static const char *const macro_labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
+                lbl = macro_labels[i];
+                if (i == 0) {
+                    bar_val = granular_state.macro_scan; bar_max = 100U;
+                    decimal(val_str, (int)bar_val, 1); strcat(val_str, "%");
+                } else if (i == 1) {
+                    bar_val = granular_state.macro_size; bar_max = 500U;
+                    decimal(val_str, (int)bar_val, 1); strcat(val_str, "MS");
+                } else if (i == 2) {
+                    bar_val = granular_state.macro_density; bar_max = MAX_GRAINS;
+                    decimal(val_str, (int)bar_val, 1);
+                } else {
+                    bar_val = granular_state.macro_spray; bar_max = 100U;
+                    decimal(val_str, (int)bar_val, 1); strcat(val_str, "%");
+                }
+            }
+
             unsigned y = 78 + i * 24;
-            char val_str[12];
-            decimal(val_str, val, 1);
-            
-            // Clear the entire row to prevent ghosting pixels
-            paint_fill(8, y, 230, 8, BACK); 
-            text(8, y, labels[i], 1, DIM, BACK);
-            text(56, y, val_str, 1, TEXT, BACK);
-            
+            paint_fill(8, y, 230, 8, BACK);
+            text(8, y, lbl, 1, DIM, BACK);
+            text(52, y, val_str, 1, TEXT, BACK);
+
             paint_fill(100, y, 132, 8, PANEL);
-            unsigned width = val * 132U / max_vals[i];
+            unsigned width = bar_max ? (bar_val * 132U) / bar_max : 0;
+            if (width > 132U) width = 132U;
             if (width) paint_fill(100, y, width, 8, colors[i]);
         }
         return;
+    }
     }
 
     if (!groove_pad_count(track)) {
@@ -1519,13 +1566,39 @@ static void draw_page_body(const struct fm1_ble_status *ble)
             color = colors[t];
             decimal(value, views[t].volume, 1);
         } else if (visible == TONE_EDIT || (visible == FM_ENV && v->type != GROOVE_DX7)) {
-            unsigned parameter = tone_parameter(col);
-            const fm1_param_t *p = groove_tone_parameter(track, tone_part(), parameter);
-            label = p ? p->name : "";
-            if (!p)
-                value[0] = 0;
-            else
-                tone_label(parameter, patch[parameter], p, value);
+            if (v->type == GROOVE_GRANULAR) {
+                unsigned pg = visible == FM_ENV ? 0 : tone_pages[track][tone_slot()];
+                static const char *const filter_modes[] = {"OFF", "LPF", "BPF", "HPF"};
+                if (visible == FM_ENV) {
+                    static const char *const env_labels[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
+                    uint8_t raw = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : col == 2 ? granular_state.env_sustain : granular_state.env_release;
+                    label = env_labels[col];
+                    decimal(value, (int)((raw * 100U + 63U) / 127U), 1);
+                    strcat(value, "%");
+                } else if (pg == 1) {
+                    static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "-"};
+                    label = filt_labels[col];
+                    if (col == 0) strcpy(value, filter_modes[granular_state.filter_mode & 3U]);
+                    else if (col == 1) { decimal(value, (int)((granular_state.filter_cutoff * 100U + 63U) / 127U), 1); strcat(value, "%"); }
+                    else if (col == 2) { decimal(value, (int)((granular_state.filter_res * 100U + 63U) / 127U), 1); strcat(value, "%"); }
+                    else strcpy(value, "--");
+                } else {
+                    static const char *const macro_labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
+                    label = macro_labels[col];
+                    if (col == 0) { decimal(value, granular_state.macro_scan, 1); strcat(value, "%"); }
+                    else if (col == 1) { decimal(value, granular_state.macro_size, 1); strcat(value, "MS"); }
+                    else if (col == 2) { decimal(value, granular_state.macro_density, 1); }
+                    else { decimal(value, granular_state.macro_spray, 1); strcat(value, "%"); }
+                }
+            } else {
+                unsigned parameter = tone_parameter(col);
+                const fm1_param_t *p = groove_tone_parameter(track, tone_part(), parameter);
+                label = p ? p->name : "";
+                if (!p)
+                    value[0] = 0;
+                else
+                    tone_label(parameter, patch[parameter], p, value);
+            }
         } else if (visible == FM_ENV) {
             static const char *const labels[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
             label = labels[col];
@@ -2397,13 +2470,41 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
                     
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
-                // Let the SELECT knob change the active sample slot
-                if (controls->encoders[6]) {
-                    int new_slot = (int)granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
-                    if (new_slot < 0) new_slot = 15;
-                    if (new_slot > 15) new_slot = 0;
-                    granular_set_active_slot((uint8_t)new_slot);
-                }
+                        // Let ALGO knob (encoders[1]) or encoders[0] in advanced_edit flip between Page 1 (Cloud) and Page 2 (Filter)
+                        if (page == TONE_EDIT && (controls->encoders[1] || (advanced_edit && controls->encoders[0]))) {
+                            int page_delta = controls->encoders[1] + (advanced_edit ? controls->encoders[0] : 0);
+                            tone_pages[track][slot] = (uint8_t)clamp((int)tone_pages[track][slot] + (page_delta > 0 ? 1 : -1), 0, 1);
+                            cache->title_cache = ~0U;
+                        }
+
+                        // Let the SELECT knob change the active sample slot
+                        if (controls->encoders[6]) {
+                            int new_slot = (int)granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
+                            if (new_slot < 0) new_slot = 15;
+                            if (new_slot > 15) new_slot = 0;
+                            granular_set_active_slot((uint8_t)new_slot);
+                        }
+
+                        // Route K1-K4 to Master ADSR (on ENV page), Multimode Filter (on Edit Page 2), or Grain Macros (on Edit Page 1)
+                        for (unsigned col = 0; col < 4; ++col) {
+                            int ticks = controls->encoders[2 + col];
+                            if (ticks) {
+                                if (page == FM_ENV) {
+                                    int cur = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : col == 2 ? granular_state.env_sustain : granular_state.env_release;
+                                    granular_set_env(&granular_state, (uint8_t)col, (int16_t)clamp(cur + ticks * 2, 0, 127));
+                                } else if (tone_pages[track][slot] == 1) {
+                                    if (col == 0) granular_set_filter(&granular_state, 0, (int16_t)clamp((int)granular_state.filter_mode + (ticks > 0 ? 1 : -1), 0, 3));
+                                    else if (col == 1) granular_set_filter(&granular_state, 1, (int16_t)clamp((int)granular_state.filter_cutoff + ticks * 2, 0, 127));
+                                    else if (col == 2) granular_set_filter(&granular_state, 2, (int16_t)clamp((int)granular_state.filter_res + ticks * 2, 0, 127));
+                                } else {
+                                    if (col == 0) granular_set_macro(&granular_state, 0, (int16_t)clamp((int)granular_state.macro_scan + ticks, 1, 100));
+                                    else if (col == 1) granular_set_macro(&granular_state, 1, (int16_t)clamp((int)granular_state.macro_size + ticks * 5, 10, 500));
+                                    else if (col == 2) granular_set_macro(&granular_state, 2, (int16_t)clamp((int)granular_state.macro_density + ticks, 1, MAX_GRAINS));
+                                    else if (col == 3) granular_set_macro(&granular_state, 3, (int16_t)clamp((int)granular_state.macro_spray + ticks, 0, 100));
+                                }
+                            }
+                        }
+                    }
                 
                 // Read raw ticks to bypass accumulator and cast to int to prevent underflow
         for (unsigned col = 0; col < 4; ++col) {
