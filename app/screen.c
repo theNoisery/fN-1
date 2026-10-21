@@ -900,7 +900,12 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         static const char *const labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
         int max_vals[] = {1023, 4000, 200, 1023};
         
+        // Show current sample slot
+        text(150, 56, "SAMPLE SLOT:", 1, DIM, BACK);
+        number(220, 56, granular_get_active_slot() + 1, 1, 1, TEXT, BACK);
+        
         for (unsigned i = 0; i < 4; ++i) {
+        // ... (keep the rest of the bar drawing code exactly the same)
             int val = i == 0 ? granular_state.macro_scan : i == 1 ? granular_state.macro_size : i == 2 ? granular_state.macro_density : granular_state.macro_spray;
             unsigned y = 78 + i * 24;
             char val_str[12];
