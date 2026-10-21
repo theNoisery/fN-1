@@ -39,6 +39,12 @@ void granular_note_off(void *state_ptr, uint8_t note) {
     (void)state_ptr; (void)note;
 }
 
+void granular_set_sample(void *state_ptr, const int16_t *buffer, uint32_t length) {
+    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
+    state->sample_buffer = buffer;
+    state->sample_length = length;
+}
+
 void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     memset(out_l, 0, frames * sizeof(int16_t));
