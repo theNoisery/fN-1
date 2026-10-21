@@ -895,14 +895,27 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
     
-    // Draw manual UI readout Knobs for Granular 
+    // Draw horizontal parameter bars for Granular 
     if (type == GROOVE_GRANULAR) {
         static const char *const labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
-        char val_str[12];
+        int max_vals[] = {1023, 4000, 200, 1023};
+        
         for (unsigned i = 0; i < 4; ++i) {
             int val = i == 0 ? granular_state.macro_scan : i == 1 ? granular_state.macro_size : i == 2 ? granular_state.macro_density : granular_state.macro_spray;
+            unsigned y = 78 + i * 24;
+            char val_str[12];
             decimal(val_str, val, 1);
-            knob(i, labels[i], val_str, colors[i]); 
+            
+            // Draw Label
+            text(8, y, labels[i], 1, DIM, BACK);
+            // Draw Value Text
+            paint_fill(56, y, 36, 7, BACK);
+            text(56, y, val_str, 1, TEXT, BACK);
+            // Draw Bar Background
+            paint_fill(100, y, 132, 8, PANEL);
+            // Draw Bar Fill
+            unsigned width = val * 132U / max_vals[i];
+            if (width) paint_fill(100, y, width, 8, colors[i]);
         }
         return;
     }
