@@ -875,7 +875,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_PSG                       ? "8 VOICES  YM / AY CHIPS"
              : type == GROOVE_PLUCK                     ? "8 VOICES  KARPLUS STRONG"
              : type == GROOVE_303                       ? pages[pg]
-             : type == GROOVE_GRANULAR                  ? "GRAIN CLOUD"
+             : type == GROOVE_GRANULAR                  ? "GRAIN CLOUD PARAMS"
              : type == GROOVE_808 && part == GROOVE_DRUMS ? "KIT SETTINGS"
                                                         : groove_pad_name(track, part),
              1, TEXT, BACK);
@@ -886,30 +886,20 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_303
                  ? (view.mono ? "MONO SLIDE  MONO/POLY KEYS" : "POLY 4      MONO/POLY KEYS")
              : type == GROOVE_SAMPLE ? "8 WHITE KEYS PLAY / SELECT"
-             : type == GROOVE_GRANULAR ? "KEYS PLAY  MACROS 1-4"
+             : type == GROOVE_GRANULAR ? "KEYS PLAY  MACROS K1-K4"
                                      : page == FM_ENV ? "PRESETS DRUM  KEYS PLAY" : "PRESETS DRUM / KIT  KEYS PLAY",
              1, DIM, BACK);
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
-    if (!groove_pad_count(track)) {
+    
+    // Draw manual UI readout Knobs for Granular 
+    if (type == GROOVE_GRANULAR) {
+        static const char *const labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
         for (unsigned i = 0; i < 4; ++i) {
-            unsigned parameter = tone_parameter(i);
-            const fm1_param_t *p = groove_tone_parameter(track, 0, parameter);
-            if (!p) continue;
-            unsigned value = values[parameter];
-            if (cache->tile_cache[i] == value) continue;
-            cache->tile_cache[i] = value;
-            unsigned y = 78 + i * 24;
-            char label[12];
-            tone_label(parameter, value, p, label);
-            text(8, y, p->name, 1, DIM, BACK);
-            paint_fill(56, y, 36, 7, BACK);
-            text(56, y, label, 1, TEXT, BACK);
-            paint_fill(100, y, 132, 8, PANEL);
-            unsigned width = value * 132U / p->max;
-            if (width)
-                paint_fill(100, y, width, 8, colors[i]);
+            knob(i, labels[i], "EDIT", colors[i]); 
         }
+        return;
+    }
     } else {
         unsigned count = type == GROOVE_SAMPLE ? groove_pad_count(track) : GROOVE_DRUMS + (page != FM_ENV);
         for (unsigned i = 0; i < count; ++i) {
