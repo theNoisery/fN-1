@@ -77,7 +77,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
         // Splice the grains into the final output mix, scaled by our key gate
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 13; 
+            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 6; 
         }
             
         output[i] = usb_frames == -2 ? 0 : limit(value);
