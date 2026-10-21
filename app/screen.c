@@ -861,6 +861,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_PSG    ? "PSG EDIT"
              : type == GROOVE_PLUCK  ? "PLUCK"
              : type == GROOVE_SAMPLE ? "SAMPLER"
+             : type == GROOVE_GRANULAR ? "GRANULAR" 
                                      : "808 EDIT",
              2, colors[track], BACK);
         text(150, 38, "T", 1, colors[track], BACK);
