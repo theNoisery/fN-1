@@ -9,7 +9,6 @@ static unsigned output_gain;
 static int32_t usb_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 
-// Declare the global state for your Granular engine
 GranularVoiceState granular_state;
 static int granular_is_init = 0;
 
@@ -30,7 +29,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
 {
     if (!output) return;
     
-    // Safety init
     if (!granular_is_init) fm1_output_reset();
 
     unsigned target = fm1_engine_output_level();
@@ -43,14 +41,19 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     unsigned left = ((unsigned)usb_gain[0] * output_gain) >> 7;
     unsigned right = ((unsigned)usb_gain[1] * output_gain) >> 7;
     
-    // --- GRANULAR AUDIO RENDER ---
     int16_t gran_l[FM1_BLOCK_FRAMES];
     int16_t gran_r[FM1_BLOCK_FRAMES];
     
     int granular_active = 0;
+    unsigned gran_vol = 0;
+    
     for (unsigned t = 0; t < GROOVE_TRACKS; ++t) {
         if (groove_source_type(t) == GROOVE_GRANULAR) {
             granular_active = 1;
+            struct groove_view view;
+            groove_get_view(t, 0, &view);
+            // Read native track envelope and apply to Granular volume
+            if (view.audible && view.level > 0) gran_vol = view.level;
             break;
         }
     }
@@ -64,11 +67,9 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
         if (usb_frames == FM1_BLOCK_FRAMES)
             value += ((int64_t)usb_pcm[i] * ((i & 1U) ? right : left)) >> 7;
             
-        // --- GRANULAR AUDIO INJECT ---
-        // Splice the grains into the final output mix, scaled by master volume
-        if (granular_active) {
+        if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            value += ((int64_t)gran_sample * output_gain * 256) >> 7; 
+            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 13; 
         }
             
         output[i] = usb_frames == -2 ? 0 : limit(value);
