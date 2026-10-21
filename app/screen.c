@@ -895,30 +895,28 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
     
-    // Draw horizontal parameter bars for Granular 
+// Draw horizontal parameter bars for Granular 
     if (type == GROOVE_GRANULAR) {
         static const char *const labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
         int max_vals[] = {1023, 4000, 200, 1023};
         
-        // Show current sample slot
+        // Clear background and show current sample slot properly
+        paint_fill(150, 56, 90, 8, BACK); 
         text(150, 56, "SAMPLE SLOT:", 1, DIM, BACK);
-        number(220, 56, granular_get_active_slot() + 1, 1, 1, TEXT, BACK);
+        number(226, 56, granular_get_active_slot() + 1, 1, 1, TEXT, BACK);
         
         for (unsigned i = 0; i < 4; ++i) {
-        // ... (keep the rest of the bar drawing code exactly the same)
             int val = i == 0 ? granular_state.macro_scan : i == 1 ? granular_state.macro_size : i == 2 ? granular_state.macro_density : granular_state.macro_spray;
             unsigned y = 78 + i * 24;
             char val_str[12];
             decimal(val_str, val, 1);
             
-            // Draw Label
+            // Clear the entire row to prevent ghosting pixels
+            paint_fill(8, y, 230, 8, BACK); 
             text(8, y, labels[i], 1, DIM, BACK);
-            // Draw Value Text
-            paint_fill(56, y, 36, 7, BACK);
             text(56, y, val_str, 1, TEXT, BACK);
-            // Draw Bar Background
+            
             paint_fill(100, y, 132, 8, PANEL);
-            // Draw Bar Fill
             unsigned width = val * 132U / max_vals[i];
             if (width) paint_fill(100, y, width, 8, colors[i]);
         }
@@ -2401,25 +2399,36 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
                 // Let the SELECT knob change the active sample slot
                 if (controls->encoders[6]) {
-                    int new_slot = granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
+                    int new_slot = (int)granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
                     if (new_slot < 0) new_slot = 15;
                     if (new_slot > 15) new_slot = 0;
                     granular_set_active_slot((uint8_t)new_slot);
                 }
                 
+                // Read raw ticks to bypass accumulator and cast to int to prevent underflow
                 for (unsigned col = 0; col < 4; ++col) {
-                // ... (keep the rest of the macro limits the same)
-                                unsigned parameter = tone_parameter(col);
-                                const fm1_param_t *p =
-                                    groove_tone_parameter(track, tone_part(), parameter);
-                                if (p)
-                                    groove_tone_edit(
-                                        track, tone_part(), parameter,
-                                        p->names ? controls->encoders[2 + col]
-                                                 : fm_encoder_delta(2 + col, controls->encoders[2 + col]));
-                            }
+                    int ticks = controls->encoders[2 + col];
+                    if (ticks) {
+                        if (col == 0) granular_state.macro_scan = clamp((int)granular_state.macro_scan + ticks * 16, 0, 1023);
+                        else if (col == 1) granular_state.macro_size = clamp((int)granular_state.macro_size + ticks * 64, 100, 4000);
+                        else if (col == 2) granular_state.macro_density = clamp((int)granular_state.macro_density + ticks * 4, 0, 200);
+                        else if (col == 3) granular_state.macro_spray = clamp((int)granular_state.macro_spray + ticks * 16, 0, 1023);
                     }
-                } else if (page >= FM_EDIT && page <= FM_LFO) {
+                }
+            } else {
+                for (unsigned col = 0; col < 4; ++col)
+                    if (controls->encoders[2 + col]) {
+                        unsigned parameter = tone_parameter(col);
+                        const fm1_param_t *p =
+                            groove_tone_parameter(track, tone_part(), parameter);
+                        if (p)
+                            groove_tone_edit(
+                                track, tone_part(), parameter,
+                                p->names ? controls->encoders[2 + col]
+                                         : fm_encoder_delta(2 + col, controls->encoders[2 + col]));
+                    }
+            }
+        } else if (page >= FM_EDIT && page <= FM_LFO) {
                     if (page == FM_EDIT) {
                         for (unsigned i = 0; i < 10; ++i) {
                             uint32_t bit = 1U << edit_keys[i];
