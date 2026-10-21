@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define MAX_GRAINS 8
+#define MAX_GRAINS 12
 
 typedef struct {
     int32_t position;
@@ -23,7 +23,9 @@ typedef struct {
     uint16_t macro_size;
     uint16_t macro_density;
     uint16_t macro_spray;
+    uint32_t current_speed; // Tracks pitch 
     uint32_t spawn_counter;
+    uint32_t rng_state;     // Fast RNG for spray jitter
     Grain grains[MAX_GRAINS];
 } GranularVoiceState;
 
