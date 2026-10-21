@@ -861,7 +861,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_PSG    ? "PSG EDIT"
              : type == GROOVE_PLUCK  ? "PLUCK"
              : type == GROOVE_SAMPLE ? "SAMPLER"
-             : type == GROOVE_GRANULAR ? "GRANULAR" 
+             : type == GROOVE_GRANULAR ? "GRANULAR"
                                      : "808 EDIT",
              2, colors[track], BACK);
         text(150, 38, "T", 1, colors[track], BACK);
@@ -872,11 +872,12 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         static const char *const pages[] = {"FILTER", "OSCILLATOR / LEVEL", "DRIVE / SLIDE"};
         text(8, 56,
              page == FM_ENV && !groove_pad_count(track) ? source_names[type]
-             : type == GROOVE_PSG                           ? "8 VOICES  YM / AY CHIPS"
-             : type == GROOVE_PLUCK                       ? "8 VOICES  KARPLUS STRONG"
-             : type == GROOVE_303                         ? pages[pg]
+             : type == GROOVE_PSG                       ? "8 VOICES  YM / AY CHIPS"
+             : type == GROOVE_PLUCK                     ? "8 VOICES  KARPLUS STRONG"
+             : type == GROOVE_303                       ? pages[pg]
+             : type == GROOVE_GRANULAR                  ? "GRAIN CLOUD"
              : type == GROOVE_808 && part == GROOVE_DRUMS ? "KIT SETTINGS"
-                                                          : groove_pad_name(track, part),
+                                                        : groove_pad_name(track, part),
              1, TEXT, BACK);
         text(8, 181,
              page == FM_ENV ? (groove_pad_count(track) ? "PRESETS PART  KEYS PLAY" : "KEYS PLAY  SELECT TRACK")
@@ -885,6 +886,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              : type == GROOVE_303
                  ? (view.mono ? "MONO SLIDE  MONO/POLY KEYS" : "POLY 4      MONO/POLY KEYS")
              : type == GROOVE_SAMPLE ? "8 WHITE KEYS PLAY / SELECT"
+             : type == GROOVE_GRANULAR ? "KEYS PLAY  MACROS 1-4"
                                      : page == FM_ENV ? "PRESETS DRUM  KEYS PLAY" : "PRESETS DRUM / KIT  KEYS PLAY",
              1, DIM, BACK);
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
