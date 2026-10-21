@@ -23,7 +23,7 @@ jobs:
           path: |
             C:\JL
             build\wasi-sdk
-          key: jieli-2.5.3-wasi-v3-${{ hashFiles('sdk/manifest.json') }}
+          key: jieli-2.5.3-wasi-v4-${{ hashFiles('sdk/manifest.json') }}
 
       - name: Download & Unpack JieLi Toolchain (Bypass GUI Installer)
         if: steps.cache-toolchains.outputs.cache-hit != 'true'
@@ -56,12 +56,8 @@ jobs:
             Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
             Write-Host "Successfully extracted pi32 toolchain to C:\JL\pi32"
           } else {
-            Write-Host "Directory contents of C:\JL_extracted:"
-            Get-ChildItem -Path "C:\JL_extracted" -Recurse -Depth 3
             throw "Could not find clang.exe inside extracted archive."
           }
-
-          Get-FileHash "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256
 
       - name: Build Browser Preview & Hardware Firmware (.fwsc)
         shell: pwsh
@@ -69,6 +65,18 @@ jobs:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
           FM1_SOURCE_URL: 'https://github.com/${{ github.repository }}/archive/refs/heads/${{ github.ref_name }}.zip'
         run: |
+          # Define Get-FileHash fallback if missing in runner session
+          if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
+            function global:Get-FileHash([string]$Path, [string]$Algorithm="SHA256") {
+              $hash = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
+              $stream = [System.IO.File]::OpenRead($Path)
+              $bytes = $hash.ComputeHash($stream)
+              $stream.Close()
+              $hashString = [BitConverter]::ToString($bytes) -replace '-'
+              [PSCustomObject]@{ Algorithm = $Algorithm; Hash = $hashString; Path = $Path }
+            }
+          }
+
           .\tools\Build-Web.ps1 -LocalPreview
           .\build.bat --package
 
