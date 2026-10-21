@@ -2,23 +2,37 @@
 #include "audio_output.h"
 #include "fm1_engine_control.h"
 #include "fm1_audio_io.h"
+#include "instrument.h"
+#include "synth/engine_granular.h"
 
 static unsigned output_gain;
 static int32_t usb_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 
-void fm1_output_reset(void) { output_gain = 0; }
+// Declare the global state for your Granular engine
+GranularVoiceState granular_state;
+static int granular_is_init = 0;
+
+void fm1_output_reset(void) { 
+    output_gain = 0; 
+    granular_init(&granular_state, 32000); 
+    granular_is_init = 1;
+}
+
 static inline __attribute__((always_inline)) int32_t limit(int64_t value)
 {
-    /* Bias signed 24-bit PCM into [0, 2^24). Unsigned arithmetic also
-     * defines the check at the int64 limits, without two wide compares. */
     if (((uint64_t)value + 8388608U) >> 24)
         return value < 0 ? -8388608 : 8388607;
     return (int32_t)value;
 }
+
 FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
 {
     if (!output) return;
+    
+    // Safety init
+    if (!granular_is_init) fm1_output_reset();
+
     unsigned target = fm1_engine_output_level();
     if (target > 127U) target = 127U;
     int delta = (int)target - (int)output_gain;
@@ -28,17 +42,39 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     int usb_frames = fm1_usb_audio_read(usb_pcm, FM1_BLOCK_FRAMES, usb_gain);
     unsigned left = ((unsigned)usb_gain[0] * output_gain) >> 7;
     unsigned right = ((unsigned)usb_gain[1] * output_gain) >> 7;
-    /* Accumulate USB before clipping, then add Bluetooth.
-     * Discard the block if the USB stream resets. */
+    
+    // --- GRANULAR AUDIO RENDER ---
+    int16_t gran_l[FM1_BLOCK_FRAMES];
+    int16_t gran_r[FM1_BLOCK_FRAMES];
+    
+    int granular_active = 0;
+    for (unsigned t = 0; t < GROOVE_TRACKS; ++t) {
+        if (groove_source_type(t) == GROOVE_GRANULAR) {
+            granular_active = 1;
+            break;
+        }
+    }
+    
+    if (granular_active) {
+        granular_render_block(&granular_state, gran_l, gran_r, FM1_BLOCK_FRAMES);
+    }
+
     for (unsigned i = 0; i < FM1_BLOCK_WORDS; ++i) {
         int64_t value = ((int64_t)output[i] * output_gain) >> 7;
         if (usb_frames == FM1_BLOCK_FRAMES)
             value += ((int64_t)usb_pcm[i] * ((i & 1U) ? right : left)) >> 7;
+            
+        // --- GRANULAR AUDIO INJECT ---
+        // Splice the grains into the final output mix, scaled by master volume
+        if (granular_active) {
+            int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
+            value += ((int64_t)gran_sample * output_gain * 256) >> 7; 
+        }
+            
         output[i] = usb_frames == -2 ? 0 : limit(value);
     }
+    
     if (fm1_bluetooth_audio_read(bluetooth_pcm, FM1_BLOCK_FRAMES) == FM1_BLOCK_FRAMES) {
-        /* output is already clipped to 24 bits. Adding signed 16-bit PCM
-         * times at most 254 fits in 25 bits, so this stage needs no int64. */
         for (unsigned i = 0; i < FM1_BLOCK_WORDS; ++i) {
             int32_t value = output[i] + (int32_t)bluetooth_pcm[i] * (int32_t)(output_gain * 2U);
             output[i] = value > 8388607 ? 8388607 : value < -8388608 ? -8388608 : value;
