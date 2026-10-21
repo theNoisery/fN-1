@@ -2406,15 +2406,15 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                 }
                 
                 // Read raw ticks to bypass accumulator and cast to int to prevent underflow
-                for (unsigned col = 0; col < 4; ++col) {
-                    int ticks = controls->encoders[2 + col];
-                    if (ticks) {
-                        if (col == 0) granular_state.macro_scan = clamp((int)granular_state.macro_scan + ticks * 16, 0, 1023);
-                        else if (col == 1) granular_state.macro_size = clamp((int)granular_state.macro_size + ticks * 64, 100, 4000);
-                        else if (col == 2) granular_state.macro_density = clamp((int)granular_state.macro_density + ticks * 4, 0, 200);
-                        else if (col == 3) granular_state.macro_spray = clamp((int)granular_state.macro_spray + ticks * 16, 0, 1023);
-                    }
-                }
+        for (unsigned col = 0; col < 4; ++col) {
+            int ticks = controls->encoders[2 + col];
+            if (ticks) {
+                if (col == 0) granular_state.macro_scan = clamp((int)granular_state.macro_scan + ticks, 1, 100);
+                else if (col == 1) granular_state.macro_size = clamp((int)granular_state.macro_size + ticks * 5, 10, 500);
+                else if (col == 2) granular_state.macro_density = clamp((int)granular_state.macro_density + ticks, 1, MAX_GRAINS);
+                else if (col == 3) granular_state.macro_spray = clamp((int)granular_state.macro_spray + ticks, 0, 100);
+            }
+        }
             } else {
                 for (unsigned col = 0; col < 4; ++col)
                     if (controls->encoders[2 + col]) {
