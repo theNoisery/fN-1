@@ -966,11 +966,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
             if (width > 132U) width = 132U;
             if (width) paint_fill(100, y, width, 8, colors[i]);
         }
-        return;
-    }
-    }
-
-    if (!groove_pad_count(track)) {
+    } else if (!groove_pad_count(track)) {
         for (unsigned i = 0; i < 4; ++i) {
             unsigned parameter = tone_parameter(i);
             const fm1_param_t *p = groove_tone_parameter(track, 0, parameter);
