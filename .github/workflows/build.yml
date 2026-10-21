@@ -1,0 +1,70 @@
+name: Build fN-1 Firmware & Workbench
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Lets you trigger a build manually with 1 click on GitHub
+
+jobs:
+  build-fn1:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout fN-1 repository
+        uses: actions/checkout@v4
+
+      - name: Cache JieLi PI32v2 Toolchain & WASI SDK
+        id: cache-toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\JL
+            build\wasi-sdk
+          key: jieli-2.5.3-wasi-${{ hashFiles('sdk/manifest.json') }}
+
+      - name: Download & Extract JieLi Windows Toolchain 2.5.3
+        if: steps.cache-toolchains.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "Downloading JieLi Windows Toolchain (PI32v2 clang 4.0.1)..."
+          curl.exe -L "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
+
+          # Install silently or extract with 7-Zip if the NSIS/Inno installer requires a GUI
+          Start-Process -FilePath ".\jieli-toolchain.exe" -ArgumentList "/S" -Wait -NoNewWindow
+          if (-not (Test-Path "C:\JL\pi32\bin\clang.exe")) {
+            Write-Host "Silent install did not place C:\JL\pi32; extracting archive with 7z..."
+            7z x jieli-toolchain.exe -o"C:\JL_extracted" -y
+            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse | Select-Object -First 1
+            if ($clangFile) {
+              $pi32Root = $clangFile.Directory.Parent.FullName
+              New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
+              Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
+            }
+          }
+
+          if (-not (Test-Path "C:\JL\pi32\bin\clang.exe")) {
+            throw "Failed to locate C:\JL\pi32\bin\clang.exe after extraction."
+          }
+          Get-FileHash "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256
+
+      - name: Build Browser Preview & Hardware Firmware (.fwsc)
+        shell: pwsh
+        env:
+          FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
+          # Required by M-VAVE's package script so the Workbench knows where your source lives
+          FM1_SOURCE_URL: 'https://github.com/${{ github.repository }}/archive/refs/heads/${{ github.ref_name }}.zip'
+        run: |
+          .\tools\Build-Web.ps1 -LocalPreview
+          .\build.bat --package
+
+      - name: Upload Compiled Firmware & Workbench Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fN-1-firmware-and-workbench
+          path: |
+            build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
+            build/official-web/FM1-Official-Open-Source.html
+            build/preview/
+          if-no-files-found: error
