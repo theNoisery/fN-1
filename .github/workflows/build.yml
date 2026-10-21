@@ -5,11 +5,12 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: # Lets you trigger a build manually with 1 click on GitHub
+  workflow_dispatch:
 
 jobs:
   build-fn1:
     runs-on: windows-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout fN-1 repository
@@ -22,38 +23,50 @@ jobs:
           path: |
             C:\JL
             build\wasi-sdk
-          key: jieli-2.5.3-wasi-${{ hashFiles('sdk/manifest.json') }}
+          key: jieli-2.5.3-wasi-v3-${{ hashFiles('sdk/manifest.json') }}
 
-      - name: Download & Extract JieLi Windows Toolchain 2.5.3
+      - name: Download & Unpack JieLi Toolchain (Bypass GUI Installer)
         if: steps.cache-toolchains.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading JieLi Windows Toolchain (PI32v2 clang 4.0.1)..."
-          curl.exe -L "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
+          Write-Host "Downloading JieLi Windows Toolchain (50.4 MB)..."
+          curl.exe -L --retry 3 "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
 
-          # Install silently or extract with 7-Zip if the NSIS/Inno installer requires a GUI
-          Start-Process -FilePath ".\jieli-toolchain.exe" -ArgumentList "/S" -Wait -NoNewWindow
-          if (-not (Test-Path "C:\JL\pi32\bin\clang.exe")) {
-            Write-Host "Silent install did not place C:\JL\pi32; extracting archive with 7z..."
-            7z x jieli-toolchain.exe -o"C:\JL_extracted" -y
-            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse | Select-Object -First 1
-            if ($clangFile) {
-              $pi32Root = $clangFile.Directory.Parent.FullName
-              New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
-              Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
-            }
+          New-Item -ItemType Directory -Force -Path "C:\JL_extracted" | Out-Null
+
+          Write-Host "Attempting direct archive extraction with 7-Zip..."
+          7z x jieli-toolchain.exe -o"C:\JL_extracted" -y | Out-Null
+
+          $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
+
+          if (-not $clangFile) {
+            Write-Host "Installer is an Inno Setup archive; unpacking with innoextract..."
+            choco install innoextract -y --no-progress | Out-Null
+            innoextract -e jieli-toolchain.exe -d "C:\JL_extracted"
+            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
           }
 
-          if (-not (Test-Path "C:\JL\pi32\bin\clang.exe")) {
-            throw "Failed to locate C:\JL\pi32\bin\clang.exe after extraction."
+          if (-not $clangFile) {
+            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           }
+
+          if ($clangFile) {
+            $pi32Root = $clangFile.Directory.Parent.FullName
+            New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
+            Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
+            Write-Host "Successfully extracted pi32 toolchain to C:\JL\pi32"
+          } else {
+            Write-Host "Directory contents of C:\JL_extracted:"
+            Get-ChildItem -Path "C:\JL_extracted" -Recurse -Depth 3
+            throw "Could not find clang.exe inside extracted archive."
+          }
+
           Get-FileHash "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256
 
       - name: Build Browser Preview & Hardware Firmware (.fwsc)
         shell: pwsh
         env:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
-          # Required by M-VAVE's package script so the Workbench knows where your source lives
           FM1_SOURCE_URL: 'https://github.com/${{ github.repository }}/archive/refs/heads/${{ github.ref_name }}.zip'
         run: |
           .\tools\Build-Web.ps1 -LocalPreview
