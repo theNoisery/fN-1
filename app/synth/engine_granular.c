@@ -1,23 +1,72 @@
 /* SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception */
 #include "engine_granular.h"
+#include "fm1_sea.h"
 #include <string.h>
+
+// Import the firmware's native ADPCM quantization table
+extern const int16_t sample_dqt[];
 
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
 
-static const int16_t *global_samples[16] = {NULL};
+static const uint8_t *global_samples[16] = {NULL};
 static uint32_t global_lengths[16] = {0};
 static uint8_t active_sample_slot = 0;
 
+// Allocate a 262 KB static RAM buffer (approx 4 seconds of audio at 32kHz)
+#define MAX_RAM_FRAMES 131072 
+static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
+static uint32_t decoded_length = 0;
+
 void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length) {
     if (slot < 16) {
-        global_samples[slot] = buffer;
+        // The core passes the raw flash pointer; we store it as uint8_t
+        global_samples[slot] = (const uint8_t *)buffer; 
         global_lengths[slot] = length;
     }
 }
 
+// Decode the compressed ADPCM flash block into our raw PCM RAM buffer 
+static void granular_decode_to_ram(void) {
+    const uint8_t *data = global_samples[active_sample_slot];
+    uint32_t frames = global_lengths[active_sample_slot];
+    
+    if (!data || !frames) {
+        decoded_length = 0;
+        return;
+    }
+
+    if (frames > MAX_RAM_FRAMES) frames = MAX_RAM_FRAMES;
+    decoded_length = frames;
+
+    uint8_t decode_state[256]; 
+    memset(decode_state, 0, sizeof(decode_state));
+
+    unsigned chunks = (frames + 319) / 320;
+    unsigned frame_idx = 0;
+
+    for (unsigned chunk = 0; chunk < chunks; chunk++) {
+        size_t offset = chunk * 228; // CHUNK_BYTES[cite: 10]
+        int16_t chunk_pcm[320];
+
+        // Decode 16 groups (320 frames) per chunk[cite: 10]
+        fm1_sea_decode_groups(data + offset, 228, 5, sample_dqt, 0, 15, decode_state, chunk_pcm);
+
+        unsigned frames_to_copy = 320;
+        if (frame_idx + 320 > frames) frames_to_copy = frames - frame_idx;
+
+        memcpy(&decoded_ram_buffer[frame_idx], chunk_pcm, frames_to_copy * sizeof(int16_t));
+        frame_idx += frames_to_copy;
+        
+        if (frame_idx >= frames) break;
+    }
+}
+
 void granular_set_active_slot(uint8_t slot) {
-    if (slot < 16) active_sample_slot = slot;
+    if (slot < 16) {
+        active_sample_slot = slot;
+        granular_decode_to_ram(); // Trigger the decode loop on slot change
+    }
 }
 
 uint8_t granular_get_active_slot(void) {
@@ -41,6 +90,9 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
         }
         hann_initialized = 1;
     }
+    
+    // Initialize slot 0 on startup
+    granular_decode_to_ram();
 }
 
 void granular_set_macro(void *state_ptr, uint8_t knob_idx, int16_t val) {
@@ -60,7 +112,6 @@ void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
         92682, 98193, 104032, 110211, 116752, 123677
     };
     
-    // Set Base Note to C2 (MIDI Note 36)
     int octave = (note / 12) - 3; 
     uint32_t base_speed = pitch_table[note % 12];
     
@@ -85,15 +136,14 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
     memset(out_l, 0, frames * sizeof(int16_t));
     memset(out_r, 0, frames * sizeof(int16_t));
 
-    state->sample_buffer = global_samples[active_sample_slot];
-    state->sample_length = global_lengths[active_sample_slot];
-
-    if (!state->sample_buffer || state->sample_length == 0) return;
+    // Read directly from our uncompressed RAM buffer instead of flash
+    if (decoded_length == 0) return;
 
     for (size_t f = 0; f < frames; f++) {
         state->spawn_counter++;
-        uint32_t spawn_thresh = 2000 - (state->macro_density * 9); 
-        if (spawn_thresh < 50) spawn_thresh = 50; 
+        
+        uint32_t spawn_thresh = 250 - state->macro_density; 
+        if (spawn_thresh < 5) spawn_thresh = 5; 
 
         if (state->spawn_counter >= spawn_thresh) {
             state->spawn_counter = 0;
@@ -105,15 +155,15 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
                     state->grains[i].length = (int16_t)((state->macro_size * state->sample_rate) / 10000);
                     if (state->grains[i].length < 100) state->grains[i].length = 100;
                     
-                    uint32_t base_pos = ((uint32_t)state->macro_scan * state->sample_length) >> 10;
+                    uint32_t base_pos = ((uint32_t)state->macro_scan * decoded_length) >> 10;
                     
                     if (state->macro_spray > 0) {
-                        uint32_t jitter_range = ((uint32_t)state->macro_spray * state->sample_length) >> 11; 
+                        uint32_t jitter_range = ((uint32_t)state->macro_spray * decoded_length) >> 11; 
                         if (jitter_range > 0) {
                             int32_t jitter = (fast_rand(&state->rng_state) % (jitter_range * 2)) - jitter_range;
                             int32_t final_pos = (int32_t)base_pos + jitter;
-                            if (final_pos < 0) final_pos += state->sample_length;
-                            else if ((uint32_t)final_pos >= state->sample_length) final_pos -= state->sample_length;
+                            if (final_pos < 0) final_pos += decoded_length;
+                            else if ((uint32_t)final_pos >= decoded_length) final_pos -= decoded_length;
                             base_pos = (uint32_t)final_pos;
                         }
                     }
@@ -133,8 +183,8 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             if (!g->active) continue;
             active_count++;
 
-            uint32_t index = (g->position >> 16) % state->sample_length;
-            int16_t raw = state->sample_buffer[index];
+            uint32_t index = (g->position >> 16) % decoded_length;
+            int16_t raw = decoded_ram_buffer[index];
             int win_idx = (g->counter * 1024) / g->length;
             if (win_idx > 1023) win_idx = 1023;
             
@@ -146,8 +196,9 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
         }
 
         if (active_count > 0) {
-            // Divide by 4 to scale amplitude, then clamp to absolutely prevent noise
-            int32_t mixed = sample_sum / 4; 
+            int scale_factor = (active_count > 6) ? (active_count / 3) : 2;
+            int32_t mixed = sample_sum / scale_factor; 
+            
             if (mixed > 32767) mixed = 32767;
             else if (mixed < -32768) mixed = -32768;
             
