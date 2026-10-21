@@ -17,7 +17,6 @@ static const uint8_t *global_samples[16] = {NULL};
 static uint32_t global_lengths[16] = {0};
 static uint8_t active_sample_slot = 0;
 
-// 131072 frames = ~4.1 seconds of uncompressed 16-bit PCM at 32kHz
 #define MAX_RAM_FRAMES 131072
 static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
 static uint32_t decoded_length = 0;
@@ -42,7 +41,6 @@ static void granular_decode_to_ram(void) {
     for (unsigned chunk = 0; chunk < chunks; chunk++) {
         size_t offset = (size_t)chunk * 228U;
 
-        // Decode each 20-sample SEA5 group sequentially into our RAM buffer
         for (unsigned g = 0; g < 16U; g++) {
             int16_t group_pcm[FM1_SEA_GROUP];
             if (fm1_sea_decode_groups(data + offset, 228U, 5U, sample_dqt,
@@ -92,22 +90,35 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     memset(state, 0, sizeof(GranularVoiceState));
     state->sample_rate = sample_rate;
-    state->macro_scan = 0;
-    state->macro_size = 1800;    // Default to lush ~280ms Paulstretch grains
-    state->macro_density = 120;  // Smooth multi-grain overlap
-    state->macro_spray = 256;    // Gentle temporal diffusion
+
+    // Calibrated defaults
+    state->macro_scan = 1;       // 1% (Start of sample)
+    state->macro_size = 250;     // 250 ms
+    state->macro_density = 12;   // 12 overlapping grains
+    state->macro_spray = 25;     // 25% spray
+
+    // Default Master ADSR (0-127)
+    state->env_attack = 20;
+    state->env_decay = 40;
+    state->env_sustain = 100;
+    state->env_release = 50;
+    state->env_stage = GRAN_ENV_IDLE;
+    state->env_level = 0;
+
+    // Default Filter
+    state->filter_mode = GRAN_FILT_LPF;
+    state->filter_cutoff = 110;
+    state->filter_res = 20;
+
     state->current_speed = 0x10000;
     state->rng_state = 0x12345678;
     state->gate = 0;
-    state->env_level = 0;
 
     if (!hann_initialized) {
         for (int i = 0; i < 1024; i++) {
-            // Smooth raised-cosine bell window
             int32_t x = i - 512;
             int32_t parabola = 32767 - ((x * x) >> 3);
             if (parabola < 0) parabola = 0;
-            // Square the parabola for a true zero-slope Hann bell tail
             hann_window[i] = (int16_t)((parabola * parabola) >> 15);
         }
         hann_initialized = 1;
@@ -117,10 +128,26 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
 
 void granular_set_macro(void *state_ptr, uint8_t knob_idx, int16_t val) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
-    if (knob_idx == 0) state->macro_scan = (uint16_t)val;
-    else if (knob_idx == 1) state->macro_size = (uint16_t)val;
-    else if (knob_idx == 2) state->macro_density = (uint16_t)val;
-    else if (knob_idx == 3) state->macro_spray = (uint16_t)val;
+    if (knob_idx == 0) state->macro_scan = (uint16_t)(val < 1 ? 1 : val > 100 ? 100 : val);
+    else if (knob_idx == 1) state->macro_size = (uint16_t)(val < 10 ? 10 : val > 500 ? 500 : val);
+    else if (knob_idx == 2) state->macro_density = (uint16_t)(val < 1 ? 1 : val > MAX_GRAINS ? MAX_GRAINS : val);
+    else if (knob_idx == 3) state->macro_spray = (uint16_t)(val < 0 ? 0 : val > 100 ? 100 : val);
+}
+
+void granular_set_env(void *state_ptr, uint8_t knob_idx, int16_t val) {
+    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
+    uint8_t clamped = (uint8_t)(val < 0 ? 0 : val > 127 ? 127 : val);
+    if (knob_idx == 0) state->env_attack = clamped;
+    else if (knob_idx == 1) state->env_decay = clamped;
+    else if (knob_idx == 2) state->env_sustain = clamped;
+    else if (knob_idx == 3) state->env_release = clamped;
+}
+
+void granular_set_filter(void *state_ptr, uint8_t knob_idx, int16_t val) {
+    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
+    if (knob_idx == 0) state->filter_mode = (uint8_t)(val < 0 ? 0 : val > 3 ? 3 : val);
+    else if (knob_idx == 1) state->filter_cutoff = (uint8_t)(val < 0 ? 0 : val > 127 ? 127 : val);
+    else if (knob_idx == 2) state->filter_res = (uint8_t)(val < 0 ? 0 : val > 127 ? 127 : val);
 }
 
 void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
@@ -132,7 +159,6 @@ void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
         92682, 98193, 104032, 110211, 116752, 123677
     };
 
-    // Base note C2 (MIDI note 36) = 1.0x speed
     int octave = ((int)note / 12) - 3;
     uint32_t base_speed = pitch_table[note % 12];
 
@@ -140,18 +166,21 @@ void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
     else if (octave < 0) state->current_speed = base_speed >> (-octave);
     else state->current_speed = base_speed;
 
-    // Trigger immediate grain spawn if starting from silence
-    if (!state->gate && state->env_level == 0) {
+    if (!state->gate && state->env_stage == GRAN_ENV_IDLE) {
         state->spawn_counter = state->next_spawn_delay;
         state->playhead_drift = 0;
     }
     state->gate = 1;
+    state->env_stage = GRAN_ENV_ATTACK;
 }
 
 void granular_note_off(void *state_ptr, uint8_t note) {
     (void)note;
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     state->gate = 0;
+    if (state->env_stage != GRAN_ENV_IDLE) {
+        state->env_stage = GRAN_ENV_RELEASE;
+    }
 }
 
 static inline uint32_t fast_rand(uint32_t *rng) {
@@ -168,38 +197,69 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
 
     if (decoded_length < 64) return;
 
-    // Grain length: 62ms (SIZE=100) up to 550ms (SIZE=4000) for Paulstretch clouds
-    uint32_t grain_len = 1600U + ((uint32_t)state->macro_size * 4U);
+    // 1. SIZE in exact milliseconds (10ms to 500ms -> 320 to 16000 frames at 32kHz)
+    uint32_t size_ms = state->macro_size < 10 ? 10 : state->macro_size > 500 ? 500 : state->macro_size;
+    uint32_t grain_len = (size_ms * state->sample_rate) / 1000U;
 
-    // Target simultaneous overlapping grains: 4 (DENS=0) to 20 (DENS=200)
-    uint32_t target_overlap = 4U + ((uint32_t)state->macro_density * 16U) / 200U;
+    // 2. DENSITY in exact simultaneous overlapping grains (1 to 24)
+    uint32_t target_overlap = state->macro_density < 1 ? 1 : state->macro_density > MAX_GRAINS ? MAX_GRAINS : state->macro_density;
     uint32_t base_interval = grain_len / target_overlap;
-    if (base_interval < 32U) base_interval = 32U;
+    if (base_interval < 16U) base_interval = 16U;
+
+    // 3. Master ADSR rates
+    uint32_t att_step = 65536U / (32U + (uint32_t)state->env_attack * 512U);
+    uint32_t dec_step = 65536U / (32U + (uint32_t)state->env_decay * 512U);
+    uint32_t sus_target = ((uint32_t)state->env_sustain * 65535U) / 127U;
+    uint32_t rel_step = 65536U / (32U + (uint32_t)state->env_release * 768U);
+    if (att_step == 0) att_step = 1;
+    if (dec_step == 0) dec_step = 1;
+    if (rel_step == 0) rel_step = 1;
+
+    // 4. State Variable Filter coefficients (Q15 fixed-point)
+    int32_t svf_f = 512 + ((int32_t)state->filter_cutoff * 180); // Cutoff
+    int32_t svf_q = 32767 - ((int32_t)state->filter_res * 220);  // Damping
 
     for (size_t f = 0; f < frames; f++) {
-        // Smooth master envelope: ~40ms attack, ~1.0s release tail
-        if (state->gate) {
-            if (state->env_level < 65535U) {
-                state->env_level += 48U;
-                if (state->env_level > 65535U) state->env_level = 65535U;
-            }
-        } else {
-            if (state->env_level > 0U) {
-                if (state->env_level > 2U) state->env_level -= 2U;
-                else state->env_level = 0U;
-            }
+        // Advance Master ADSR Envelope
+        switch (state->env_stage) {
+            case GRAN_ENV_ATTACK:
+                state->env_level += att_step;
+                if (state->env_level >= 65535U) {
+                    state->env_level = 65535U;
+                    state->env_stage = GRAN_ENV_DECAY;
+                }
+                break;
+            case GRAN_ENV_DECAY:
+                if (state->env_level > sus_target + dec_step) {
+                    state->env_level -= dec_step;
+                } else {
+                    state->env_level = sus_target;
+                    state->env_stage = GRAN_ENV_SUSTAIN;
+                }
+                break;
+            case GRAN_ENV_SUSTAIN:
+                state->env_level = sus_target;
+                break;
+            case GRAN_ENV_RELEASE:
+                if (state->env_level > rel_step) {
+                    state->env_level -= rel_step;
+                } else {
+                    state->env_level = 0U;
+                    state->env_stage = GRAN_ENV_IDLE;
+                }
+                break;
+            default:
+                state->env_level = 0U;
+                break;
         }
 
-        // Keep spawning grains while gate is held OR release tail is still fading
-        if (state->env_level > 0U) {
-            // Very slow Paulstretch forward drift (~12% normal speed)
-            state->playhead_drift += (state->current_speed >> 3);
+        if (state->env_stage != GRAN_ENV_IDLE) {
+            state->playhead_drift += (state->current_speed >> 4);
 
             state->spawn_counter++;
             if (state->spawn_counter >= state->next_spawn_delay) {
                 state->spawn_counter = 0;
 
-                // Randomize next spawn interval (+/- 25%) to eliminate mechanical buzz
                 uint32_t timing_jitter = fast_rand(&state->rng_state) % (base_interval / 2U + 1U);
                 state->next_spawn_delay = (base_interval * 3U) / 4U + timing_jitter;
 
@@ -209,23 +269,23 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
                         state->grains[i].counter = 0;
                         state->grains[i].length = grain_len;
 
-                        // Stereo spread centered around 128 (wider as SPRAY increases)
                         uint32_t rand_pan = fast_rand(&state->rng_state) & 127U;
                         state->grains[i].pan = (uint8_t)(64U + rand_pan);
 
-                        uint32_t scan_offset = ((uint32_t)state->macro_scan * decoded_length) >> 10;
+                        // SCAN: 1% to 100% mapped across sample length
+                        uint32_t scan_pct = state->macro_scan < 1 ? 1 : state->macro_scan > 100 ? 100 : state->macro_scan;
+                        uint32_t scan_offset = ((scan_pct - 1U) * decoded_length) / 100U;
                         uint32_t base_pos = (scan_offset + (state->playhead_drift >> 16)) % decoded_length;
 
-                        // Paulstretch phase diffusion: minimum 384-frame (~12ms) smear + SPRAY
-                        uint32_t jitter_range = 384U + (((uint32_t)state->macro_spray * decoded_length) >> 13);
-                        if (jitter_range > decoded_length / 2U) jitter_range = decoded_length / 2U;
+                        // SPRAY: 0% to 100% mapped up to 50% of total sample length
+                        uint32_t spray_pct = state->macro_spray > 100 ? 100 : state->macro_spray;
+                        uint32_t jitter_range = 256U + ((spray_pct * (decoded_length / 2U)) / 100U);
 
                         int32_t jitter = (int32_t)(fast_rand(&state->rng_state) % (jitter_range * 2U + 1U)) - (int32_t)jitter_range;
                         int32_t final_pos = (int32_t)base_pos + jitter;
                         while (final_pos < 0) final_pos += (int32_t)decoded_length;
                         uint32_t wrapped_pos = (uint32_t)final_pos % decoded_length;
 
-                        // Subtle musical shimmer (+/- 0.35% detune)
                         int32_t drift = (int32_t)(fast_rand(&state->rng_state) & 511U) - 256;
                         uint32_t speed = (uint32_t)((int32_t)state->current_speed + (((int32_t)state->current_speed * drift) >> 16));
 
@@ -247,7 +307,6 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             uint32_t pos_int = (g->position >> 16) % decoded_length;
             uint32_t pos_frac = g->position & 0xFFFFU;
 
-            // Sub-sample linear interpolation for clean chromatic playback
             int32_t s0 = decoded_ram_buffer[pos_int];
             int32_t s1 = decoded_ram_buffer[(pos_int + 1U) % decoded_length];
             int32_t sample = s0 + (((s1 - s0) * (int32_t)pos_frac) >> 16);
@@ -265,12 +324,33 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             if (g->counter >= g->length) g->active = 0;
         }
 
-        // Apply smooth envelope and constant-power overlap normalization
         int32_t env = (int32_t)(state->env_level >> 8);
         int32_t norm_div = (int32_t)(2U + (target_overlap >> 2));
 
         int32_t mixed_l = ((sum_l / norm_div) * env) >> 8;
         int32_t mixed_r = ((sum_r / norm_div) * env) >> 8;
+
+        // Stereo Multimode Filter (Chamberlin SVF)
+        if (state->filter_mode != GRAN_FILT_OFF) {
+            int32_t high_l = mixed_l - state->svf_low_l - ((svf_q * state->svf_band_l) >> 15);
+            state->svf_band_l += (svf_f * high_l) >> 15;
+            state->svf_low_l += (svf_f * state->svf_band_l) >> 15;
+
+            int32_t high_r = mixed_r - state->svf_low_r - ((svf_q * state->svf_band_r) >> 15);
+            state->svf_band_r += (svf_f * high_r) >> 15;
+            state->svf_low_r += (svf_f * state->svf_band_r) >> 15;
+
+            if (state->filter_mode == GRAN_FILT_LPF) {
+                mixed_l = state->svf_low_l;
+                mixed_r = state->svf_low_r;
+            } else if (state->filter_mode == GRAN_FILT_BPF) {
+                mixed_l = state->svf_band_l;
+                mixed_r = state->svf_band_r;
+            } else if (state->filter_mode == GRAN_FILT_HPF) {
+                mixed_l = high_l;
+                mixed_r = high_r;
+            }
+        }
 
         if (mixed_l > 32767) mixed_l = 32767;
         else if (mixed_l < -32768) mixed_l = -32768;
