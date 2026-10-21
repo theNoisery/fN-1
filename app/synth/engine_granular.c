@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception */
 #include "engine_granular.h"
 #include "fm1_sea.h"
+#include "engine.h"
+#include "sample_metadata.inc"
 #include <string.h>
 
 // Import the firmware's native ADPCM quantization table
