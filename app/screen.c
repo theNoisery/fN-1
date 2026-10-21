@@ -852,6 +852,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
              pg = page == FM_ENV ? 0 : tone_pages[track][tone_slot()];
     const struct groove_view view = frame_views[track];
     uint32_t title = track | (part << 3) | (pg << 7) | (type << 12) | (view.mono << 16);
+    
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(0, 32, 240, 163, BACK);
@@ -900,6 +901,26 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         }
         return;
     }
+
+    if (!groove_pad_count(track)) {
+        for (unsigned i = 0; i < 4; ++i) {
+            unsigned parameter = tone_parameter(i);
+            const fm1_param_t *p = groove_tone_parameter(track, 0, parameter);
+            if (!p) continue;
+            unsigned value = values[parameter];
+            if (cache->tile_cache[i] == value) continue;
+            cache->tile_cache[i] = value;
+            unsigned y = 78 + i * 24;
+            char label[12];
+            tone_label(parameter, value, p, label);
+            text(8, y, p->name, 1, DIM, BACK);
+            paint_fill(56, y, 36, 7, BACK);
+            text(56, y, label, 1, TEXT, BACK);
+            paint_fill(100, y, 132, 8, PANEL);
+            unsigned width = value * 132U / p->max;
+            if (width)
+                paint_fill(100, y, width, 8, colors[i]);
+        }
     } else {
         unsigned count = type == GROOVE_SAMPLE ? groove_pad_count(track) : GROOVE_DRUMS + (page != FM_ENV);
         for (unsigned i = 0; i < count; ++i) {
