@@ -8,7 +8,7 @@
 #define SAMPLE_DRUM_PADS 8
 #endif
 
-#include "../sample_metadata.inc"
+#include "sample_metadata.inc"
 
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
