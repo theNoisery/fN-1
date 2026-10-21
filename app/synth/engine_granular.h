@@ -5,13 +5,13 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define MAX_GRAINS 200
+#define MAX_GRAINS 24
 
 typedef struct {
-    int32_t position;
-    int32_t speed;
-    int16_t length;
-    int16_t counter;
+    uint32_t position;
+    uint32_t speed;
+    uint32_t length;
+    uint32_t counter;
     uint8_t pan;
     uint8_t active;
 } Grain;
@@ -24,10 +24,13 @@ typedef struct {
     uint16_t macro_size;
     uint16_t macro_density;
     uint16_t macro_spray;
-    uint32_t current_speed; 
+    uint32_t current_speed;
     uint32_t spawn_counter;
-    uint32_t rng_state;     
-    uint8_t gate; // Tracks if a key is held down
+    uint32_t next_spawn_delay;
+    uint32_t playhead_drift;
+    uint32_t env_level;
+    uint32_t rng_state;
+    uint8_t gate;
     Grain grains[MAX_GRAINS];
 } GranularVoiceState;
 
