@@ -27,6 +27,7 @@ typedef struct {
     uint32_t current_speed; 
     uint32_t spawn_counter;
     uint32_t rng_state;     
+    uint8_t gate; // Tracks if a key is held down
     Grain grains[MAX_GRAINS];
 } GranularVoiceState;
 
