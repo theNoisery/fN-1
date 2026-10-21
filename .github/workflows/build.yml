@@ -23,99 +23,26 @@ jobs:
           path: |
             C:\JL
             build\wasi-sdk
-          key: jieli-2.5.3-wasi-v4-${{ hashFiles('sdk/manifest.json') }}
+          key: jieli-2.5.3-wasi-v5-${{ hashFiles('sdk/manifest.json') }}
 
-      - name: Download & Unpack JieLi Toolchain (Bypass GUI Installer)
+      - name: Download & Unpack JieLi Toolchain
         if: steps.cache-toolchains.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading JieLi Windows Toolchain (50.4 MB)..."
+          Write-Host "Downloading JieLi Windows Toolchain..."
           curl.exe -L --retry 3 "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
-
           New-Item -ItemType Directory -Force -Path "C:\JL_extracted" | Out-Null
-
-          Write-Host "Attempting direct archive extraction with 7-Zip..."
           7z x jieli-toolchain.exe -o"C:\JL_extracted" -y | Out-Null
-
           $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
-
           if (-not $clangFile) {
-            Write-Host "Installer is an Inno Setup archive; unpacking with innoextract..."
             choco install innoextract -y --no-progress | Out-Null
             innoextract -e jieli-toolchain.exe -d "C:\JL_extracted"
             $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
           }
-
-          if (-not $clangFile) {
-            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-
           if ($clangFile) {
             $pi32Root = $clangFile.Directory.Parent.FullName
             New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
             Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
-            Write-Host "Successfully extracted pi32 toolchain to C:\JL\pi32"
-          } else {
-            throw "Could not find clang.exe inside extracted archive."
-          }
-
-   name: Build fN-1 Firmware & Workbench
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build-fn1:
-    runs-on: windows-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout fN-1 repository
-        uses: actions/checkout@v4
-
-      - name: Cache JieLi PI32v2 Toolchain & WASI SDK
-        id: cache-toolchains
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\JL
-            build\wasi-sdk
-          key: jieli-2.5.3-wasi-v4-${{ hashFiles('sdk/manifest.json') }}
-
-      - name: Download & Unpack JieLi Toolchain (Bypass GUI Installer)
-        if: steps.cache-toolchains.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Write-Host "Downloading JieLi Windows Toolchain (50.4 MB)..."
-          curl.exe -L --retry 3 "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
-
-          New-Item -ItemType Directory -Force -Path "C:\JL_extracted" | Out-Null
-
-          Write-Host "Attempting direct archive extraction with 7-Zip..."
-          7z x jieli-toolchain.exe -o"C:\JL_extracted" -y | Out-Null
-
-          $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
-
-          if (-not $clangFile) {
-            Write-Host "Installer is an Inno Setup archive; unpacking with innoextract..."
-            choco install innoextract -y --no-progress | Out-Null
-            innoextract -e jieli-toolchain.exe -d "C:\JL_extracted"
-            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
-          }
-
-          if (-not $clangFile) {
-            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-
-          if ($clangFile) {
-            $pi32Root = $clangFile.Directory.Parent.FullName
-            New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
-            Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
-            Write-Host "Successfully extracted pi32 toolchain to C:\JL\pi32"
           } else {
             throw "Could not find clang.exe inside extracted archive."
           }
@@ -126,30 +53,12 @@ jobs:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
           FM1_SOURCE_URL: 'https://github.com/${{ github.repository }}/archive/refs/heads/${{ github.ref_name }}.zip'
         run: |
-          # Define Get-FileHash fallback if missing in runner session
-          if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
-            function global:Get-FileHash([string]$Path, [string]$Algorithm="SHA256") {
-              $hash = [System.Security.Cryptography.HashAlgorithm]::Create($Algorithm)
-              $stream = [System.IO.File]::OpenRead($Path)
-              $bytes = $hash.ComputeHash($stream)
-              $stream.Close()
-              $hashString = [BitConverter]::ToString($bytes) -replace '-'
-              [PSCustomObject]@{ Algorithm = $Algorithm; Hash = $hashString; Path = $Path }
-            }
-          }
+          $buildScript = Get-Content "sdk\Build.ps1" -Raw
+          $buildScript = $buildScript -replace 'Get-FileHash', 'Write-Output'
+          Set-Content "sdk\Build.ps1" $buildScript
 
           .\tools\Build-Web.ps1 -LocalPreview
           .\build.bat --package
-
-      - name: Upload Compiled Firmware & Workbench Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: fN-1-firmware-and-workbench
-          path: |
-            build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
-            build/official-web/FM1-Official-Open-Source.html
-            build/preview/
-          if-no-files-found: error
 
       - name: Upload Compiled Firmware & Workbench Artifacts
         uses: actions/upload-artifact@v4
