@@ -59,28 +59,36 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             struct groove_view view;
             groove_get_view(t, 0, &view);
             
-            // 1. Live Keyboard Play (Overrides Sequencer)
+            // Keep the audio bus open to allow natural release tails
+            gran_vol = view.volume; 
+            
+            // 1. Live Keyboard Play
             if (controls.keys > 0) {
-                gran_vol = view.volume; 
                 if (controls.keys != last_keys) {
                     for (int k = 0; k < 27; k++) {
                         if (controls.keys & (1 << k)) {
-                            // Map physical keys starting from C2 (36)
                             granular_note_on(&granular_state, 36 + k, 100);
                             break;
                         }
                     }
                 }
-            } 
+            } else if (last_keys > 0) {
+                // Key was just released, close the internal gate to begin decay
+                granular_note_off(&granular_state, 0); 
+            }
+            
             // 2. Sequencer Playback
-            else if (view.playing && view.step.velocity > 0) {
-                gran_vol = view.step.velocity;
-                if (view.step.note != last_seq_note) {
+            else if (view.playing) {
+                if (view.step.velocity > 0 && view.step.note != last_seq_note) {
                     granular_note_on(&granular_state, view.step.note, view.step.velocity);
                     last_seq_note = view.step.note;
+                } else if (view.step.velocity == 0 && last_seq_note != 255) {
+                    granular_note_off(&granular_state, 0);
+                    last_seq_note = 255;
                 }
-            } else {
-                last_seq_note = 255; // Reset sequence tracker when stopped
+            } else if (last_seq_note != 255) {
+                granular_note_off(&granular_state, 0);
+                last_seq_note = 255;
             }
             break;
         }
