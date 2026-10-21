@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception */
 #include "engine_granular.h"
 #include <string.h>
-#include <math.h>
 
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
@@ -15,9 +14,10 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
 
     if (!hann_initialized) {
         for (int i = 0; i < 1024; i++) {
-            float angle = (float)i * (2.0f * 3.14159265f / 1024.0f);
-            float w = 0.5f * (1.0f - cosf(angle));
-            hann_window[i] = (int16_t)(w * 32767.0f);
+            // Simple raised cosine window approximation without math.h linking dependencies
+            int32_t val = 32767 - (((i - 512) * (i - 512) * 32767) >> 18);
+            if (val < 0) val = 0;
+            hann_window[i] = (int16_t)val;
         }
         hann_initialized = 1;
     }
@@ -32,14 +32,11 @@ void granular_set_macro(void *state_ptr, uint8_t knob_idx, int16_t val) {
 }
 
 void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
-    (void)state_ptr;
-    (void)note;
-    (void)vel;
+    (void)state_ptr; (void)note; (void)vel;
 }
 
 void granular_note_off(void *state_ptr, uint8_t note) {
-    (void)state_ptr;
-    (void)note;
+    (void)state_ptr; (void)note;
 }
 
 void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
