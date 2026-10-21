@@ -39,17 +39,18 @@ static void granular_decode_to_ram(void) {
     if (frames > MAX_RAM_FRAMES) frames = MAX_RAM_FRAMES;
     decoded_length = frames;
 
-    uint8_t decode_state[256]; 
+    // FIX: The decoder expects an array of 8 int32_t values for its state
+    int32_t decode_state[8]; 
     memset(decode_state, 0, sizeof(decode_state));
 
     unsigned chunks = (frames + 319) / 320;
     unsigned frame_idx = 0;
 
     for (unsigned chunk = 0; chunk < chunks; chunk++) {
-        size_t offset = chunk * 228; // CHUNK_BYTES[cite: 10]
+        size_t offset = chunk * 228; 
         int16_t chunk_pcm[320];
 
-        // Decode 16 groups (320 frames) per chunk[cite: 10]
+        // Decode 16 groups (320 frames) per chunk
         fm1_sea_decode_groups(data + offset, 228, 5, sample_dqt, 0, 15, decode_state, chunk_pcm);
 
         unsigned frames_to_copy = 320;
