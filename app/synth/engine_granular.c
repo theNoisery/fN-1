@@ -2,11 +2,12 @@
 #include "engine_granular.h"
 #include "fm1_sea.h"
 #include "engine.h"
-#include "sample_metadata.inc"
 #include <string.h>
 
-// Import the firmware's native ADPCM quantization table
-//extern const int16_t sample_dqt[];
+#ifndef SAMPLE_DRUM_PADS
+#define SAMPLE_DRUM_PADS 8
+#endif
+
 #include "../sample_metadata.inc"
 
 static int16_t hann_window[1024];
