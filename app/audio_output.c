@@ -12,6 +12,9 @@ static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 GranularVoiceState granular_state;
 static int granular_is_init = 0;
 
+static uint32_t last_keys = 0;
+static uint8_t last_seq_note = 255;
+
 void fm1_output_reset(void) { 
     output_gain = 0; 
     granular_init(&granular_state, 32000); 
@@ -47,7 +50,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     int granular_active = 0;
     unsigned gran_vol = 0;
     
-    // Read the physical keyboard state
     struct fm1_controls controls;
     fm1_controls_read(&controls);
     
@@ -57,13 +59,34 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             struct groove_view view;
             groove_get_view(t, 0, &view);
             
-            // Gate the audio: Only open the volume if a key is currently held down
+            // 1. Live Keyboard Play (Overrides Sequencer)
             if (controls.keys > 0) {
                 gran_vol = view.volume; 
+                if (controls.keys != last_keys) {
+                    for (int k = 0; k < 27; k++) {
+                        if (controls.keys & (1 << k)) {
+                            // Map physical keys starting from C2 (36)
+                            granular_note_on(&granular_state, 36 + k, 100);
+                            break;
+                        }
+                    }
+                }
+            } 
+            // 2. Sequencer Playback
+            else if (view.playing && view.step.velocity > 0) {
+                gran_vol = view.step.velocity;
+                if (view.step.note != last_seq_note) {
+                    granular_note_on(&granular_state, view.step.note, view.step.velocity);
+                    last_seq_note = view.step.note;
+                }
+            } else {
+                last_seq_note = 255; // Reset sequence tracker when stopped
             }
             break;
         }
     }
+    
+    last_keys = controls.keys;
     
     if (granular_active) {
         granular_render_block(&granular_state, gran_l, gran_r, FM1_BLOCK_FRAMES);
@@ -74,7 +97,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
         if (usb_frames == FM1_BLOCK_FRAMES)
             value += ((int64_t)usb_pcm[i] * ((i & 1U) ? right : left)) >> 7;
             
-        // Splice the grains into the final output mix, scaled by our key gate
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
             value += ((int64_t)gran_sample * gran_vol * output_gain) >> 6; 
