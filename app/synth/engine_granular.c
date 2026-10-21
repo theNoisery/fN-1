@@ -31,8 +31,16 @@ void granular_set_macro(void *state_ptr, uint8_t knob_idx, int16_t val) {
     else if (knob_idx == 3) state->macro_spray = val;
 }
 
-void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) { (void)note; (void)vel; }
-void granular_note_off(void *state_ptr, uint8_t note) { (void)note; }
+void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
+    (void)state_ptr;
+    (void)note;
+    (void)vel;
+}
+
+void granular_note_off(void *state_ptr, uint8_t note) {
+    (void)state_ptr;
+    (void)note;
+}
 
 void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
