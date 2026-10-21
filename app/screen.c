@@ -2399,18 +2399,16 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
                     
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
-                        for (unsigned col = 0; col < 4; ++col) {
-                            if (controls->encoders[2 + col]) {
-                                int delta = fm_encoder_delta(2 + col, controls->encoders[2 + col]) * 16;
-                                if (col == 0) granular_state.macro_scan = clamp(granular_state.macro_scan + delta, 0, 1023);
-                                else if (col == 1) granular_state.macro_size = clamp(granular_state.macro_size + delta, 100, 4000);
-                                else if (col == 2) granular_state.macro_density = clamp(granular_state.macro_density + delta, 0, 200);
-                                else if (col == 3) granular_state.macro_spray = clamp(granular_state.macro_spray + delta, 0, 1023);
-                            }
-                        }
-                    } else {
-                        for (unsigned col = 0; col < 4; ++col)
-                            if (controls->encoders[2 + col]) {
+                // Let the SELECT knob change the active sample slot
+                if (controls->encoders[6]) {
+                    int new_slot = granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
+                    if (new_slot < 0) new_slot = 15;
+                    if (new_slot > 15) new_slot = 0;
+                    granular_set_active_slot((uint8_t)new_slot);
+                }
+                
+                for (unsigned col = 0; col < 4; ++col) {
+                // ... (keep the rest of the macro limits the same)
                                 unsigned parameter = tone_parameter(col);
                                 const fm1_param_t *p =
                                     groove_tone_parameter(track, tone_part(), parameter);
