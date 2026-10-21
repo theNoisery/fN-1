@@ -5,6 +5,15 @@
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
 
+// Global sample pointer shared across granular voices
+static const int16_t *global_sample_buffer = NULL;
+static uint32_t global_sample_length = 0;
+
+void granular_global_sample_set(const int16_t *buffer, uint32_t length) {
+    global_sample_buffer = buffer;
+    global_sample_length = length;
+}
+
 void granular_init(void *state_ptr, uint32_t sample_rate) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     memset(state, 0, sizeof(GranularVoiceState));
@@ -14,7 +23,6 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
 
     if (!hann_initialized) {
         for (int i = 0; i < 1024; i++) {
-            // Simple raised cosine window approximation without math.h linking dependencies
             int32_t val = 32767 - (((i - 512) * (i - 512) * 32767) >> 18);
             if (val < 0) val = 0;
             hann_window[i] = (int16_t)val;
@@ -39,16 +47,16 @@ void granular_note_off(void *state_ptr, uint8_t note) {
     (void)state_ptr; (void)note;
 }
 
-void granular_set_sample(void *state_ptr, const int16_t *buffer, uint32_t length) {
-    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
-    state->sample_buffer = buffer;
-    state->sample_length = length;
-}
-
 void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     memset(out_l, 0, frames * sizeof(int16_t));
     memset(out_r, 0, frames * sizeof(int16_t));
+
+    // Pull from global sample pool if not locally set
+    if (!state->sample_buffer && global_sample_buffer) {
+        state->sample_buffer = global_sample_buffer;
+        state->sample_length = global_sample_length;
+    }
 
     if (!state->sample_buffer || state->sample_length == 0) return;
 
