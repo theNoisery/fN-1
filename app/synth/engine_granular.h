@@ -32,6 +32,8 @@ void granular_note_on(void *state, uint8_t note, uint8_t vel);
 void granular_note_off(void *state, uint8_t note);
 void granular_set_macro(void *state, uint8_t knob_idx, int16_t val);
 void granular_render_block(void *state, int16_t *out_l, int16_t *out_r, size_t frames);
-void granular_global_sample_set(const int16_t *buffer, uint32_t length);
+void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length);
+void granular_set_active_slot(uint8_t slot);
+uint8_t granular_get_active_slot(void);
 
 #endif
