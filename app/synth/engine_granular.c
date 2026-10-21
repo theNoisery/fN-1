@@ -49,12 +49,10 @@ static void granular_decode_to_ram(void) {
     for (unsigned chunk = 0; chunk < chunks; chunk++) {
         size_t offset = chunk * 228; 
         int16_t chunk_pcm[320];
-
         fm1_sea_decode_groups(data + offset, 228, 5, sample_dqt, 0, 15, decode_state, chunk_pcm);
 
         unsigned frames_to_copy = 320;
         if (frame_idx + 320 > frames) frames_to_copy = frames - frame_idx;
-
         memcpy(&decoded_ram_buffer[frame_idx], chunk_pcm, frames_to_copy * sizeof(int16_t));
         frame_idx += frames_to_copy;
         
@@ -81,6 +79,7 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     state->macro_density = 64;
     state->current_speed = 0x10000;
     state->rng_state = 0x12345678;
+    state->gate = 0;
 
     if (!hann_initialized) {
         for (int i = 0; i < 1024; i++) {
@@ -104,6 +103,7 @@ void granular_set_macro(void *state_ptr, uint8_t knob_idx, int16_t val) {
 void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
     (void)vel;
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
+    state->gate = 1; // Open the spawning gate
     
     static const uint32_t pitch_table[12] = {
         65536, 69433, 73562, 77936, 82570, 87481,
@@ -119,7 +119,9 @@ void granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
 }
 
 void granular_note_off(void *state_ptr, uint8_t note) {
-    (void)state_ptr; (void)note;
+    (void)note;
+    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
+    state->gate = 0; // Stop spawning new grains, allowing natural decay
 }
 
 static inline uint32_t fast_rand(uint32_t *rng) {
@@ -137,50 +139,51 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
     if (decoded_length == 0) return;
 
     for (size_t f = 0; f < frames; f++) {
-        state->spawn_counter++;
-        
-        uint32_t base_thresh = 250 - state->macro_density; 
-        if (base_thresh < 5) base_thresh = 5; 
-        
-        // Jitter the spawn timer to break mechanical buzzing
-        uint32_t spawn_jitter = fast_rand(&state->rng_state) % (base_thresh / 2 + 1);
-        uint32_t spawn_thresh = base_thresh + spawn_jitter;
+        // Only spawn new grains while the key is physically held down
+        if (state->gate) {
+            state->spawn_counter++;
+            
+            uint32_t base_thresh = 250 - state->macro_density; 
+            if (base_thresh < 5) base_thresh = 5; 
+            
+            uint32_t spawn_jitter = fast_rand(&state->rng_state) % (base_thresh / 2 + 1);
+            uint32_t spawn_thresh = base_thresh + spawn_jitter;
 
-        if (state->spawn_counter >= spawn_thresh) {
-            state->spawn_counter = 0;
-            for (int i = 0; i < MAX_GRAINS; i++) {
-                if (!state->grains[i].active) {
-                    state->grains[i].active = 1;
-                    state->grains[i].counter = 0;
-                    
-                    // Assign a random stereo pan to each grain
-                    state->grains[i].pan = fast_rand(&state->rng_state) & 255;
-                    
-                    state->grains[i].length = (int16_t)((state->macro_size * state->sample_rate) / 10000);
-                    if (state->grains[i].length < 100) state->grains[i].length = 100;
-                    
-                    uint32_t base_pos = ((uint32_t)state->macro_scan * decoded_length) >> 10;
-                    
-                    if (state->macro_spray > 0) {
-                        uint32_t jitter_range = ((uint32_t)state->macro_spray * decoded_length) >> 11; 
-                        if (jitter_range > 0) {
-                            int32_t jitter = (fast_rand(&state->rng_state) % (jitter_range * 2)) - jitter_range;
-                            int32_t final_pos = (int32_t)base_pos + jitter;
-                            if (final_pos < 0) final_pos += decoded_length;
-                            else if ((uint32_t)final_pos >= decoded_length) final_pos -= decoded_length;
-                            base_pos = (uint32_t)final_pos;
+            if (state->spawn_counter >= spawn_thresh) {
+                state->spawn_counter = 0;
+                for (int i = 0; i < MAX_GRAINS; i++) {
+                    if (!state->grains[i].active) {
+                        state->grains[i].active = 1;
+                        state->grains[i].counter = 0;
+                        state->grains[i].pan = fast_rand(&state->rng_state) & 255;
+                        
+                        state->grains[i].length = (int16_t)((state->macro_size * state->sample_rate) / 10000);
+                        if (state->grains[i].length < 100) state->grains[i].length = 100;
+                        
+                        uint32_t base_pos = ((uint32_t)state->macro_scan * decoded_length) >> 10;
+                        
+                        if (state->macro_spray > 0) {
+                            uint32_t jitter_range = ((uint32_t)state->macro_spray * decoded_length) >> 11; 
+                            if (jitter_range > 0) {
+                                int32_t jitter = (fast_rand(&state->rng_state) % (jitter_range * 2)) - jitter_range;
+                                int32_t final_pos = (int32_t)base_pos + jitter;
+                                if (final_pos < 0) final_pos += decoded_length;
+                                else if ((uint32_t)final_pos >= decoded_length) final_pos -= decoded_length;
+                                base_pos = (uint32_t)final_pos;
+                            }
                         }
-                    }
-                    
-                    // Apply micro-pitch drift (+/- 1.5%) for massive chorusing
-                    int32_t pitch_drift = (fast_rand(&state->rng_state) % 2048) - 1024;
-                    int32_t speed = state->current_speed + ((state->current_speed * pitch_drift) >> 16);
+                        
+                        int32_t pitch_drift = (fast_rand(&state->rng_state) % 2048) - 1024;
+                        int32_t speed = state->current_speed + ((state->current_speed * pitch_drift) >> 16);
 
-                    state->grains[i].position = base_pos << 16; 
-                    state->grains[i].speed = speed; 
-                    break;
+                        state->grains[i].position = base_pos << 16; 
+                        state->grains[i].speed = speed; 
+                        break;
+                    }
                 }
             }
+        } else {
+            state->spawn_counter = 0; 
         }
 
         int32_t sample_sum_l = 0;
@@ -199,7 +202,6 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             
             int32_t windowed = ((int32_t)raw * hann_window[win_idx]) >> 15;
             
-            // Mix to Left and Right channels based on pan
             sample_sum_l += (windowed * (255 - g->pan)) >> 8;
             sample_sum_r += (windowed * g->pan) >> 8;
             
@@ -209,17 +211,12 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
         }
 
         if (active_count > 0) {
-            // Gentle amplitude curve to keep the volume luscious and loud
-            int scale = 2;
-            if (active_count > 10) scale = 3;
-            if (active_count > 30) scale = 4;
-            if (active_count > 60) scale = 6;
-            if (active_count > 120) scale = 8;
+            // Stable scalar based entirely on the density parameter setting to eliminate zipper noise
+            int scale = 2 + (state->macro_density / 35); 
             
             int32_t mixed_l = sample_sum_l / scale; 
             int32_t mixed_r = sample_sum_r / scale; 
             
-            // Soft limits to prevent digital popping
             if (mixed_l > 32767) mixed_l = 32767;
             else if (mixed_l < -32768) mixed_l = -32768;
             
