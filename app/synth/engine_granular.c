@@ -17,20 +17,17 @@ static const uint8_t *global_samples[16] = {NULL};
 static uint32_t global_lengths[16] = {0};
 static uint8_t active_sample_slot = 0;
 
-// Allocate a 262 KB static RAM buffer (approx 4 seconds of audio at 32kHz)
 #define MAX_RAM_FRAMES 131072 
 static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
 static uint32_t decoded_length = 0;
 
 void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length) {
     if (slot < 16) {
-        // The core passes the raw flash pointer; we store it as uint8_t
         global_samples[slot] = (const uint8_t *)buffer; 
         global_lengths[slot] = length;
     }
 }
 
-// Decode the compressed ADPCM flash block into our raw PCM RAM buffer 
 static void granular_decode_to_ram(void) {
     const uint8_t *data = global_samples[active_sample_slot];
     uint32_t frames = global_lengths[active_sample_slot];
@@ -43,7 +40,6 @@ static void granular_decode_to_ram(void) {
     if (frames > MAX_RAM_FRAMES) frames = MAX_RAM_FRAMES;
     decoded_length = frames;
 
-    // FIX: The decoder expects an array of 8 int32_t values for its state
     int32_t decode_state[8]; 
     memset(decode_state, 0, sizeof(decode_state));
 
@@ -54,7 +50,6 @@ static void granular_decode_to_ram(void) {
         size_t offset = chunk * 228; 
         int16_t chunk_pcm[320];
 
-        // Decode 16 groups (320 frames) per chunk
         fm1_sea_decode_groups(data + offset, 228, 5, sample_dqt, 0, 15, decode_state, chunk_pcm);
 
         unsigned frames_to_copy = 320;
@@ -70,7 +65,7 @@ static void granular_decode_to_ram(void) {
 void granular_set_active_slot(uint8_t slot) {
     if (slot < 16) {
         active_sample_slot = slot;
-        granular_decode_to_ram(); // Trigger the decode loop on slot change
+        granular_decode_to_ram();
     }
 }
 
@@ -95,8 +90,6 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
         }
         hann_initialized = 1;
     }
-    
-    // Initialize slot 0 on startup
     granular_decode_to_ram();
 }
 
@@ -141,14 +134,17 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
     memset(out_l, 0, frames * sizeof(int16_t));
     memset(out_r, 0, frames * sizeof(int16_t));
 
-    // Read directly from our uncompressed RAM buffer instead of flash
     if (decoded_length == 0) return;
 
     for (size_t f = 0; f < frames; f++) {
         state->spawn_counter++;
         
-        uint32_t spawn_thresh = 250 - state->macro_density; 
-        if (spawn_thresh < 5) spawn_thresh = 5; 
+        uint32_t base_thresh = 250 - state->macro_density; 
+        if (base_thresh < 5) base_thresh = 5; 
+        
+        // Jitter the spawn timer to break mechanical buzzing
+        uint32_t spawn_jitter = fast_rand(&state->rng_state) % (base_thresh / 2 + 1);
+        uint32_t spawn_thresh = base_thresh + spawn_jitter;
 
         if (state->spawn_counter >= spawn_thresh) {
             state->spawn_counter = 0;
@@ -156,6 +152,9 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
                 if (!state->grains[i].active) {
                     state->grains[i].active = 1;
                     state->grains[i].counter = 0;
+                    
+                    // Assign a random stereo pan to each grain
+                    state->grains[i].pan = fast_rand(&state->rng_state) & 255;
                     
                     state->grains[i].length = (int16_t)((state->macro_size * state->sample_rate) / 10000);
                     if (state->grains[i].length < 100) state->grains[i].length = 100;
@@ -172,15 +171,20 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
                             base_pos = (uint32_t)final_pos;
                         }
                     }
+                    
+                    // Apply micro-pitch drift (+/- 1.5%) for massive chorusing
+                    int32_t pitch_drift = (fast_rand(&state->rng_state) % 2048) - 1024;
+                    int32_t speed = state->current_speed + ((state->current_speed * pitch_drift) >> 16);
 
                     state->grains[i].position = base_pos << 16; 
-                    state->grains[i].speed = state->current_speed; 
+                    state->grains[i].speed = speed; 
                     break;
                 }
             }
         }
 
-        int32_t sample_sum = 0;
+        int32_t sample_sum_l = 0;
+        int32_t sample_sum_r = 0;
         int active_count = 0;
         
         for (int i = 0; i < MAX_GRAINS; i++) {
@@ -193,7 +197,11 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             int win_idx = (g->counter * 1024) / g->length;
             if (win_idx > 1023) win_idx = 1023;
             
-            sample_sum += ((int32_t)raw * hann_window[win_idx]) >> 15;
+            int32_t windowed = ((int32_t)raw * hann_window[win_idx]) >> 15;
+            
+            // Mix to Left and Right channels based on pan
+            sample_sum_l += (windowed * (255 - g->pan)) >> 8;
+            sample_sum_r += (windowed * g->pan) >> 8;
             
             g->position += g->speed;
             g->counter++;
@@ -201,14 +209,25 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
         }
 
         if (active_count > 0) {
-            int scale_factor = (active_count > 6) ? (active_count / 3) : 2;
-            int32_t mixed = sample_sum / scale_factor; 
+            // Gentle amplitude curve to keep the volume luscious and loud
+            int scale = 2;
+            if (active_count > 10) scale = 3;
+            if (active_count > 30) scale = 4;
+            if (active_count > 60) scale = 6;
+            if (active_count > 120) scale = 8;
             
-            if (mixed > 32767) mixed = 32767;
-            else if (mixed < -32768) mixed = -32768;
+            int32_t mixed_l = sample_sum_l / scale; 
+            int32_t mixed_r = sample_sum_r / scale; 
             
-            out_l[f] = (int16_t)mixed;
-            out_r[f] = (int16_t)mixed;
+            // Soft limits to prevent digital popping
+            if (mixed_l > 32767) mixed_l = 32767;
+            else if (mixed_l < -32768) mixed_l = -32768;
+            
+            if (mixed_r > 32767) mixed_r = 32767;
+            else if (mixed_r < -32768) mixed_r = -32768;
+            
+            out_l[f] = (int16_t)mixed_l;
+            out_r[f] = (int16_t)mixed_r;
         }
     }
 }
