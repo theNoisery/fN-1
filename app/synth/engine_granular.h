@@ -42,25 +42,33 @@ typedef struct {
     uint16_t macro_density;
     uint16_t macro_spray;
 
-    // Master ADSR Envelope (0-127 each)
-    uint8_t env_attack;
-    uint8_t env_decay;
-    uint8_t env_sustain;
-    uint8_t env_release;
-    uint8_t env_stage;
+    // Master ADSR Envelope: Attack/Decay/Release in ms (0-2000), Sustain in dB (-60 to 0)
+    uint16_t env_attack;
+    uint16_t env_decay;
+    int16_t  env_sustain;
+    uint16_t env_release;
+    uint8_t  env_stage;
     uint32_t env_level; // Q16: 0 to 65535
 
-    // Stereo Multimode Filter (LPF/BPF/HPF)
+    // Stereo Multimode Filter + Chorus (Edit Page 2: K1-K4)
     uint8_t filter_mode;   // 0=OFF, 1=LPF, 2=BPF, 3=HPF
     uint8_t filter_cutoff; // 0-127
     uint8_t filter_res;    // 0-127
+    uint8_t chorus_depth;  // 0-100%
     int32_t svf_low_l, svf_band_l;
     int32_t svf_low_r, svf_band_r;
+
+    // Live FX Bus settings synced from the FX screen
+    uint8_t rev_send;
+    uint8_t dly_send;
+    uint8_t rev_time;
+    uint8_t dly_feedback;
+    uint8_t fx_return;
+    uint32_t dly_samples;
 
     uint32_t current_speed;
     uint32_t spawn_counter;
     uint32_t next_spawn_delay;
-    uint32_t playhead_drift;
     uint32_t rng_state;
     uint8_t gate;
     Grain grains[MAX_GRAINS];
@@ -72,6 +80,8 @@ void granular_note_off(void *state, uint8_t note);
 void granular_set_macro(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_env(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_filter(void *state, uint8_t knob_idx, int16_t val);
+void granular_set_fx(void *state, uint8_t rev_send, uint8_t dly_send,
+                     uint8_t rev_time, uint8_t dly_fb, uint8_t fx_ret, uint32_t dly_ticks);
 void granular_render_block(void *state, int16_t *out_l, int16_t *out_r, size_t frames);
 void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length);
 void granular_set_active_slot(uint8_t slot);
