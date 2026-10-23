@@ -58,7 +58,8 @@ typedef struct {
     int32_t svf_low_l, svf_band_l;
     int32_t svf_low_r, svf_band_r;
 
-    // Live FX Bus settings synced from the FX screen
+    // Track volume (0-100) and Live FX Bus settings
+    uint8_t volume;
     uint8_t rev_send;
     uint8_t dly_send;
     uint8_t rev_time;
