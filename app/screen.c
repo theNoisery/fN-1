@@ -273,6 +273,22 @@ static unsigned navigation_mode(void)
     return page == BLE || page == PROJECT || page == PRESET_BROWSER || page == MIX || page == NAME ||
         (page >= SOURCE && page <= RHYTHM) || (page == STEPS && !writing) || glo_down;
 }
+unsigned groove_screen_active_track(void)
+{
+    return navigation_mode() ? 255U : track;
+}
+int groove_screen_octave(void)
+{
+    return octave;
+}
+static void edit_track_volume(unsigned t, int delta)
+{
+    if (!delta) return;
+    if (groove_source_type(t) == GROOVE_GRANULAR)
+        granular_state.volume = (uint8_t)clamp((int)granular_state.volume + delta, 0, 100);
+    else
+        groove_control_edit(t, 0, delta, 0);
+}
 static unsigned encoder_active(const int16_t values[7])
 {
     for (unsigned i = 0; i < 7; ++i)
@@ -539,7 +555,8 @@ static __attribute__((noinline)) void overview(const struct groove_view v[8])
                  : v[t].type == GROOVE_303    ? (v[t].program ? "303 SQR" : "303 SAW")
                  : v[t].type == GROOVE_PSG    ? chip_names[v[t].program & 3U]
                  : v[t].type == GROOVE_PLUCK  ? "PLUCK"
-                 : v[t].type == GROOVE_SAMPLE ? "SAMPLER"
+                 : v[t].type == GROOVE_SAMPLE   ? "SAMPLER"
+                 : v[t].type == GROOVE_GRANULAR ? "GRANULAR"
                                               : "808 KIT",
                  1, colors[t], BACK);
             text(29, y + 9,
@@ -1731,8 +1748,11 @@ static void draw(const struct fm1_ble_status *ble)
         for (unsigned i = 0; i < ble->count && i < FM1_BLE_MAX_DEVICES; ++i)
             fm1_ble_get_device(i, &frame_devices[i]);
     }
-    for (unsigned t = 0; t < GROOVE_TRACKS; ++t)
+    for (unsigned t = 0; t < GROOVE_TRACKS; ++t) {
         groove_get_view(t, cursor, &frame_views[t]);
+        if (frame_views[t].type == GROOVE_GRANULAR)
+            frame_views[t].volume = granular_state.volume;
+    }
     if (visible == STEPS) {
         unsigned first = step_first(&frame_views[track]);
         for (unsigned i = 0; i < 16; ++i) {
@@ -2155,7 +2175,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
         select_track(controls->encoders[0]);
         for (unsigned i = 0; i < 4; ++i)
             if (controls->encoders[2 + i])
-                groove_control_edit((track & ~3U) + i, 0, controls->encoders[2 + i], 0);
+                edit_track_volume((track & ~3U) + i, controls->encoders[2 + i]);
         for (unsigned i = 0; i < 16; ++i)
             if ((key_down & ~blocked_keys) & (1U << white_keys[i]))
                 groove_mix_toggle(i & 7U, i >= 8);
@@ -2584,6 +2604,8 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                                                fm_encoder_delta(2 + col, controls->encoders[2 + col]));
                         }
                 } else if (page != STEPS || !seq_page) {
+                    if (controls->encoders[2])
+                        edit_track_volume(track, controls->encoders[2]);
                     if (page == OVERVIEW) {
                         if (controls->encoders[4]) {
                             struct groove_view view = {0};
