@@ -895,7 +895,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
 
-    // Draw horizontal parameter bars for Granular (Cloud, Filter, and Master ADSR)
+    // Draw horizontal parameter bars for Granular (Cloud, Filter/Chorus, and Master ADSR)
     if (type == GROOVE_GRANULAR) {
         paint_fill(150, 56, 90, 8, BACK);
         text(150, 56, "SAMPLE SLOT:", 1, DIM, BACK);
@@ -910,14 +910,22 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
 
             if (page == FM_ENV) {
                 static const char *const env_labels[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
-                uint8_t raw = i == 0 ? granular_state.env_attack : i == 1 ? granular_state.env_decay : i == 2 ? granular_state.env_sustain : granular_state.env_release;
                 lbl = env_labels[i];
-                bar_val = (raw * 100U + 63U) / 127U;
-                bar_max = 100U;
-                decimal(val_str, (int)bar_val, 1);
-                strcat(val_str, "%");
+                if (i == 2) {
+                    int db = granular_state.env_sustain;
+                    bar_val = (unsigned)(db + 60);
+                    bar_max = 60U;
+                    decimal(val_str, db, 1);
+                    strcat(val_str, "DB");
+                } else {
+                    unsigned ms = i == 0 ? granular_state.env_attack : i == 1 ? granular_state.env_decay : granular_state.env_release;
+                    bar_val = ms;
+                    bar_max = 2000U;
+                    decimal(val_str, (int)ms, 1);
+                    strcat(val_str, "MS");
+                }
             } else if (pg == 1) {
-                static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "-"};
+                static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "CHORUS"};
                 lbl = filt_labels[i];
                 if (i == 0) {
                     strcpy(val_str, filter_modes[granular_state.filter_mode & 3U]);
@@ -934,9 +942,10 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
                     decimal(val_str, (int)bar_val, 1);
                     strcat(val_str, "%");
                 } else {
-                    strcpy(val_str, "--");
-                    bar_val = 0;
-                    bar_max = 1U;
+                    bar_val = granular_state.chorus_depth;
+                    bar_max = 100U;
+                    decimal(val_str, (int)bar_val, 1);
+                    strcat(val_str, "%");
                 }
             } else {
                 static const char *const macro_labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
@@ -966,6 +975,8 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
             if (width > 132U) width = 132U;
             if (width) paint_fill(100, y, width, 8, colors[i]);
         }
+        return;
+    }
     } else if (!groove_pad_count(track)) {
         for (unsigned i = 0; i < 4; ++i) {
             unsigned parameter = tone_parameter(i);
@@ -1567,17 +1578,22 @@ static void draw_page_body(const struct fm1_ble_status *ble)
                 static const char *const filter_modes[] = {"OFF", "LPF", "BPF", "HPF"};
                 if (visible == FM_ENV) {
                     static const char *const env_labels[] = {"ATTACK", "DECAY", "SUSTAIN", "RELEASE"};
-                    uint8_t raw = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : col == 2 ? granular_state.env_sustain : granular_state.env_release;
                     label = env_labels[col];
-                    decimal(value, (int)((raw * 100U + 63U) / 127U), 1);
-                    strcat(value, "%");
+                    if (col == 2) {
+                        decimal(value, granular_state.env_sustain, 1);
+                        strcat(value, "DB");
+                    } else {
+                        unsigned ms = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : granular_state.env_release;
+                        decimal(value, (int)ms, 1);
+                        strcat(value, "MS");
+                    }
                 } else if (pg == 1) {
-                    static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "-"};
+                    static const char *const filt_labels[] = {"MODE", "CUTOFF", "RESON", "CHORUS"};
                     label = filt_labels[col];
                     if (col == 0) strcpy(value, filter_modes[granular_state.filter_mode & 3U]);
                     else if (col == 1) { decimal(value, (int)((granular_state.filter_cutoff * 100U + 63U) / 127U), 1); strcat(value, "%"); }
                     else if (col == 2) { decimal(value, (int)((granular_state.filter_res * 100U + 63U) / 127U), 1); strcat(value, "%"); }
-                    else strcpy(value, "--");
+                    else { decimal(value, granular_state.chorus_depth, 1); strcat(value, "%"); }
                 } else {
                     static const char *const macro_labels[] = {"SCAN", "SIZE", "DENS", "SPRAY"};
                     label = macro_labels[col];
@@ -2466,14 +2482,12 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
                     
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
-                        // Let ALGO knob (encoders[1]) or encoders[0] in advanced_edit flip between Page 1 (Cloud) and Page 2 (Filter)
                         if (page == TONE_EDIT && (controls->encoders[1] || (advanced_edit && controls->encoders[0]))) {
                             int page_delta = controls->encoders[1] + (advanced_edit ? controls->encoders[0] : 0);
                             tone_pages[track][slot] = (uint8_t)clamp((int)tone_pages[track][slot] + (page_delta > 0 ? 1 : -1), 0, 1);
                             cache->title_cache = ~0U;
                         }
 
-                        // Let the SELECT knob change the active sample slot
                         if (controls->encoders[6]) {
                             int new_slot = (int)granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
                             if (new_slot < 0) new_slot = 15;
@@ -2481,17 +2495,22 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                             granular_set_active_slot((uint8_t)new_slot);
                         }
 
-                        // Route K1-K4 to Master ADSR (on ENV page), Multimode Filter (on Edit Page 2), or Grain Macros (on Edit Page 1)
                         for (unsigned col = 0; col < 4; ++col) {
                             int ticks = controls->encoders[2 + col];
                             if (ticks) {
+                                int accel = fm_encoder_delta(2 + col, (int16_t)ticks);
                                 if (page == FM_ENV) {
-                                    int cur = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : col == 2 ? granular_state.env_sustain : granular_state.env_release;
-                                    granular_set_env(&granular_state, (uint8_t)col, (int16_t)clamp(cur + ticks * 2, 0, 127));
+                                    if (col == 2) {
+                                        granular_set_env(&granular_state, 2, (int16_t)clamp((int)granular_state.env_sustain + ticks, -60, 0));
+                                    } else {
+                                        int cur = col == 0 ? granular_state.env_attack : col == 1 ? granular_state.env_decay : granular_state.env_release;
+                                        granular_set_env(&granular_state, (uint8_t)col, (int16_t)clamp(cur + accel * 10, 0, 2000));
+                                    }
                                 } else if (tone_pages[track][slot] == 1) {
                                     if (col == 0) granular_set_filter(&granular_state, 0, (int16_t)clamp((int)granular_state.filter_mode + (ticks > 0 ? 1 : -1), 0, 3));
                                     else if (col == 1) granular_set_filter(&granular_state, 1, (int16_t)clamp((int)granular_state.filter_cutoff + ticks * 2, 0, 127));
                                     else if (col == 2) granular_set_filter(&granular_state, 2, (int16_t)clamp((int)granular_state.filter_res + ticks * 2, 0, 127));
+                                    else if (col == 3) granular_set_filter(&granular_state, 3, (int16_t)clamp((int)granular_state.chorus_depth + ticks * 2, 0, 100));
                                 } else {
                                     if (col == 0) granular_set_macro(&granular_state, 0, (int16_t)clamp((int)granular_state.macro_scan + ticks, 1, 100));
                                     else if (col == 1) granular_set_macro(&granular_state, 1, (int16_t)clamp((int)granular_state.macro_size + ticks * 5, 10, 500));
@@ -2500,7 +2519,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                                 }
                             }
                         }
-            } else {
+                    } else {
                 for (unsigned col = 0; col < 4; ++col)
                     if (controls->encoders[2 + col]) {
                         unsigned parameter = tone_parameter(col);
