@@ -854,7 +854,7 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
     unsigned type = groove_source_type(track), part = tone_part(),
              pg = page == FM_ENV ? 0 : tone_pages[track][tone_slot()];
     const struct groove_view view = frame_views[track];
-    uint32_t title = track | (part << 3) | (pg << 7) | (type << 12) | (view.mono << 16) | (page << 17);
+    uint32_t title = track | (part << 3) | (pg << 7) | (type << 12) | (view.mono << 16) | (page << 17) | (tone_pages[track][tone_slot()] << 20);
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(0, 32, 240, 163, BACK);
