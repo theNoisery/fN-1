@@ -5,6 +5,9 @@
 #include "instrument.h"
 #include "synth/engine_granular.h"
 
+extern unsigned groove_screen_active_track(void);
+extern int groove_screen_octave(void);
+
 static unsigned output_gain;
 static int32_t usb_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
@@ -52,6 +55,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     
     struct fm1_controls controls;
     fm1_controls_read(&controls);
+    unsigned active_track = groove_screen_active_track();
     
     for (unsigned t = 0; t < GROOVE_TRACKS; ++t) {
         if (groove_source_type(t) == GROOVE_GRANULAR) {
@@ -59,7 +63,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             struct groove_view view;
             groove_get_view(t, 0, &view);
             
-            gran_vol = view.muted ? 0 : view.volume;
+            gran_vol = view.muted ? 0 : granular_state.volume;
             
             // Sync live Reverb & Delay settings from the FX screen
             uint8_t sends[2] = {0, 0};
@@ -69,18 +73,23 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             granular_set_fx(&granular_state, sends[0], sends[1],
                             fx[0], fx[2], fx[3], groove_delay_ticks());
             
-            // 1. Live Keyboard Play
-            if (controls.keys > 0) {
+            int can_play_keys = (t == active_track) || (groove_track_role(t) == GROOVE_TRACK_PLAY);
+
+            // 1. Live Keyboard Play (ONLY when this track is selected or in PLAY role)
+            if (can_play_keys && controls.keys > 0) {
                 if (controls.keys != last_keys) {
-                    for (int k = 0; k < 27; k++) {
-                        if (controls.keys & (1 << k)) {
-                            granular_note_on(&granular_state, 36 + k, 100);
+                    for (unsigned k = 0; k < 27; k++) {
+                        if (controls.keys & (1U << k)) {
+                            unsigned note = groove_key_note(t, k, groove_screen_octave());
+                            if (note < 128) granular_note_on(&granular_state, (uint8_t)note, 100);
                             break;
                         }
                     }
                 }
+                last_keys = controls.keys;
             } else if (last_keys > 0) {
-                granular_note_off(&granular_state, 0); 
+                granular_note_off(&granular_state, 0);
+                last_keys = 0;
             }
             
             // 2. Sequencer Playback
@@ -100,8 +109,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
         }
     }
     
-    last_keys = controls.keys;
-    
     if (granular_active) {
         granular_render_block(&granular_state, gran_l, gran_r, FM1_BLOCK_FRAMES);
     }
@@ -113,7 +120,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            // +12dB boosted 24-bit mix gain (>> 4 instead of >> 6)
             value += ((int64_t)gran_sample * gran_vol * output_gain) >> 4; 
         }
             
