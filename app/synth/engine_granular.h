@@ -61,7 +61,6 @@ typedef struct {
     uint16_t macro_stereo;
     uint16_t macro_pitch_rnd;
     uint8_t  poly_voices;
-    uint8_t  chorus_depth;
 
     // Master ADSR Envelope: Attack/Decay/Release in ms (0-2000), Sustain in dB (-60 to 0)
     uint16_t env_attack;
@@ -74,6 +73,7 @@ typedef struct {
     uint8_t filter_cutoff; // 0-127
     uint8_t filter_res;    // 0-127
     uint8_t filter_slope;  // 0=12dB, 1=24dB, 2=36dB
+    uint8_t chorus_depth;  // 0-100%
     int32_t svf_low_l[3], svf_band_l[3];
     int32_t svf_low_r[3], svf_band_r[3];
 
