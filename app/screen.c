@@ -644,11 +644,12 @@ static __attribute__((noinline)) void steps(const struct groove_view *v)
         text(8, 35, "T", 1, colors[track], BACK);
         number(14, 35, track + 1, 1, 1, colors[track], BACK);
         text(30, 35,
-             groove_pad_count(track) != 0                ? groove_pad_name(track, drum)
-             : groove_source_type(track) == GROOVE_303   ? "303 STEPS"
-             : groove_source_type(track) == GROOVE_PSG   ? "PSG STEPS"
-             : groove_source_type(track) == GROOVE_PLUCK ? "PLUCK STEPS"
-                                                         : "DX7 STEPS",
+             groove_pad_count(track) != 0                  ? groove_pad_name(track, drum)
+             : groove_source_type(track) == GROOVE_303     ? "303 STEPS"
+             : groove_source_type(track) == GROOVE_PSG     ? "PSG STEPS"
+             : groove_source_type(track) == GROOVE_PLUCK   ? "PLUCK STEPS"
+             : groove_source_type(track) == GROOVE_GRANULAR ? "GRAN STEPS"
+                                                           : "DX7 STEPS",
              1, TEXT, BACK);
         unsigned pending = v->sequence_length != v->next_length;
         text(174, 35, pending ? "NEXT" : "LEN ", 1, pending ? AMBER : DIM, BACK);
@@ -2118,7 +2119,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                 fm_group = operator_page[track][op]; page = FM_EDIT;
             } else {
                 advanced_edit = 1; page = TONE_EDIT;
-                tone_pages[track][tone_slot()] = groove_source_type(track) == GROOVE_303 ? 1 : 0;
+                tone_pages[track][tone_slot()] = (groove_source_type(track) == GROOVE_303 || groove_source_type(track) == GROOVE_GRANULAR) ? 1 : 0;
             }
         } else if (pressed & BUTTON(EDIT)) {
             unsigned edit = groove_source_type(track) == GROOVE_DX7 ? FM_QUICK : TONE_EDIT;
@@ -2450,7 +2451,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                 } else if (page == FM_QUICK) {
                     static const uint8_t parameters[] = {134, 135, 144};
                     for (unsigned i = 0; i < 3; ++i) groove_fm_edit(track, parameters[i], controls->encoders[2 + i]);
-                    groove_control_edit(track, 0, controls->encoders[5], 0);
+                    edit_track_volume(track, controls->encoders[5]);
                 } else if (page == EFFECTS) {
                     unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 2);
                     if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
@@ -2465,7 +2466,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     } else {
                         for (unsigned i = 0; i < 2; ++i)
                             groove_sends_edit(track, i, controls->encoders[2 + i]);
-                        groove_control_edit(track, 0, controls->encoders[4], 0);
+                        edit_track_volume(track, controls->encoders[4]);
                         groove_effects_edit(3, controls->encoders[5]);
                     }
                 } else if (page == FM_LFO && groove_source_type(track) != GROOVE_DX7) {
@@ -2494,10 +2495,12 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         }
                     }
                     unsigned slot = tone_slot(), count = groove_tone_count(track, tone_part());
-                    int direction = page == TONE_EDIT && advanced_edit ? (controls->encoders[0] > 0) - (controls->encoders[0] < 0) : 0;
-                    if (!advanced_edit) tone_pages[track][slot] = 0;
-                    tone_pages[track][slot] = (uint8_t)clamp(
-                        (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
+                    if (groove_source_type(track) != GROOVE_GRANULAR) {
+                        int direction = page == TONE_EDIT && advanced_edit ? (controls->encoders[0] > 0) - (controls->encoders[0] < 0) : 0;
+                        if (!advanced_edit) tone_pages[track][slot] = 0;
+                        tone_pages[track][slot] = (uint8_t)clamp(
+                            (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
+                    }
                     
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
                         // Prevent background code from resetting our page index back to 0
@@ -2544,19 +2547,19 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                             }
                         }
                     } else {
-                for (unsigned col = 0; col < 4; ++col)
-                    if (controls->encoders[2 + col]) {
-                        unsigned parameter = tone_parameter(col);
-                        const fm1_param_t *p =
-                            groove_tone_parameter(track, tone_part(), parameter);
-                        if (p)
-                            groove_tone_edit(
-                                track, tone_part(), parameter,
-                                p->names ? controls->encoders[2 + col]
-                                         : fm_encoder_delta(2 + col, controls->encoders[2 + col]));
+                        for (unsigned col = 0; col < 4; ++col)
+                            if (controls->encoders[2 + col]) {
+                                unsigned parameter = tone_parameter(col);
+                                const fm1_param_t *p =
+                                    groove_tone_parameter(track, tone_part(), parameter);
+                                if (p)
+                                    groove_tone_edit(
+                                        track, tone_part(), parameter,
+                                        p->names ? controls->encoders[2 + col]
+                                                 : fm_encoder_delta(2 + col, controls->encoders[2 + col]));
+                            }
                     }
-            }
-        } else if (page >= FM_EDIT && page <= FM_LFO) {
+                } else if (page >= FM_EDIT && page <= FM_LFO) {
                     if (page == FM_EDIT) {
                         for (unsigned i = 0; i < 10; ++i) {
                             uint32_t bit = 1U << edit_keys[i];
@@ -2635,8 +2638,6 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                             }
                         }
                     }
-                    if (controls->encoders[2])
-                        groove_control_edit(track, 0, controls->encoders[2], 0);
                     if (controls->encoders[5]) {
                         groove_tempo_edit(controls->encoders[5]);
                         if (groove_clock_mode() == GROOVE_CLOCK_MIDI) {
@@ -2647,13 +2648,15 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                 }
                 if (page == FM_ENV && groove_source_type(track) == GROOVE_DX7 && controls->encoders[6])
                     groove_adsr_enable(track, controls->encoders[6] > 0);
-                if (controls->encoders[6] && page != ARP_EDIT && page != STEPS && page != FM_ENV && page != FM_LFO && page != EFFECTS && page != NAME && !(page == TONE_EDIT && groove_pad_count(track) != 0))
-                    groove_control_edit(track, controls->encoders[6], 0, 0);
-                if (controls->encoders[1] && page != STEPS && page != ARP_EDIT) {
-                    if (groove_source_type(track) == GROOVE_DX7)
-                        groove_fm_edit(track, 134, fm_encoder_delta(1, controls->encoders[1]));
-                    else
-                        groove_control_edit(track, 0, 0, controls->encoders[1]);
+                if (groove_source_type(track) != GROOVE_GRANULAR) {
+                    if (controls->encoders[6] && page != ARP_EDIT && page != STEPS && page != FM_ENV && page != FM_LFO && page != EFFECTS && page != NAME && !(page == TONE_EDIT && groove_pad_count(track) != 0))
+                        groove_control_edit(track, controls->encoders[6], 0, 0);
+                    if (controls->encoders[1] && page != STEPS && page != ARP_EDIT) {
+                        if (groove_source_type(track) == GROOVE_DX7)
+                            groove_fm_edit(track, 134, fm_encoder_delta(1, controls->encoders[1]));
+                        else
+                            groove_control_edit(track, 0, 0, controls->encoders[1]);
+                    }
                 }
             }
         }
@@ -2959,6 +2962,7 @@ const void *groove_screen_web_targets(void)
     if (page == OVERVIEW) {
         for (unsigned t = 0; t < 8; ++t) {
             struct groove_view row; groove_get_view(t, cursor, &row);
+            if (row.type == GROOVE_GRANULAR) row.volume = granular_state.volume;
             char label[16] = "T1 LEVEL"; label[1] += t;
             web_target(210, 48 + t * 18, 27, 16, 2, 0, t, label, row.volume, NULL);
         }
@@ -2986,7 +2990,7 @@ const void *groove_screen_web_targets(void)
     } else if (page == TONE_EDIT || (page == FM_ENV && type != GROOVE_DX7)) {
         if (!groove_pad_count(track))
             for (unsigned col = 0; col < 4; ++col) web_alias(6, 74 + col * 24, 228, 19, col);
-        if (page == TONE_EDIT && advanced_edit && groove_tone_count(track, tone_part()) > 4)
+        if (page == TONE_EDIT && (type == GROOVE_GRANULAR || (advanced_edit && groove_tone_count(track, tone_part()) > 4)))
             web_target(188, 33, 40, 17, 6, 0, track, "PARAMETER PAGE", tone_pages[track][tone_slot()] + 1, NULL);
     } else if (page == EFFECTS) {
         for (unsigned col = 0; col < 4; ++col) web_alias(6, 86 + col * 22, 204, 20, col);
@@ -3018,7 +3022,7 @@ int groove_screen_web_adjust(unsigned context, unsigned action, unsigned index, 
     if (!action) return (int)index + 3; /* Encoder index + 1. */
     if (action == 6) return (int)index + 1;
     if (action == 1) groove_tempo_edit(delta);
-    else if (action == 2) groove_control_edit(owner, 0, delta, 0);
+    else if (action == 2) edit_track_volume(owner, delta);
     else if (action == 3) groove_fm_edit(owner, index, delta);
     else if (action == 4) groove_mono_set(owner, delta > 0);
     else if (action == 5) groove_adsr_enable(owner, delta > 0);
