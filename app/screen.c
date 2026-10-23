@@ -2480,12 +2480,17 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         (int)tone_pages[track][slot] + direction, 0, (int)((count - 1) / 4));
                     
                     if (groove_source_type(track) == GROOVE_GRANULAR) {
-                        if (page == TONE_EDIT && (controls->encoders[1] || (advanced_edit && controls->encoders[0]))) {
-                            int page_delta = controls->encoders[1] + (advanced_edit ? controls->encoders[0] : 0);
+                        // Prevent background code from resetting our page index back to 0
+                        advanced_edit = 1; 
+
+                        // Let ALGO knob (encoders[1]) or encoders[0] flip between Page 1 (Cloud) and Page 2 (Filter)
+                        if (page == TONE_EDIT && (controls->encoders[1] || controls->encoders[0])) {
+                            int page_delta = controls->encoders[1] + controls->encoders[0];
                             tone_pages[track][slot] = (uint8_t)clamp((int)tone_pages[track][slot] + (page_delta > 0 ? 1 : -1), 0, 1);
                             cache->title_cache = ~0U;
                         }
 
+                        // Let the SELECT knob change the active sample slot
                         if (controls->encoders[6]) {
                             int new_slot = (int)granular_get_active_slot() + (controls->encoders[6] > 0 ? 1 : -1);
                             if (new_slot < 0) new_slot = 15;
@@ -2493,6 +2498,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                             granular_set_active_slot((uint8_t)new_slot);
                         }
 
+                        // Route K1-K4 to Master ADSR (on ENV page), Multimode Filter (on Edit Page 2), or Grain Macros (on Edit Page 1)
                         for (unsigned col = 0; col < 4; ++col) {
                             int ticks = controls->encoders[2 + col];
                             if (ticks) {
