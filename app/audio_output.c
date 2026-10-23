@@ -49,8 +49,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     
     int granular_active = 0;
     unsigned gran_vol = 0;
-    uint8_t rev_send = 0;
-    uint8_t dly_send = 0;
     
     struct fm1_controls controls;
     fm1_controls_read(&controls);
@@ -61,12 +59,15 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             struct groove_view view;
             groove_get_view(t, 0, &view);
             
-            gran_vol = view.volume; 
+            gran_vol = view.muted ? 0 : view.volume;
             
-            uint8_t sends[2];
+            // Sync live Reverb & Delay settings from the FX screen
+            uint8_t sends[2] = {0, 0};
+            uint8_t fx[4] = {0, 0, 0, 0};
             groove_sends_get(t, sends);
-            rev_send = sends[0]; // Reverb send level (0-15 or 0-100 scale)
-            dly_send = sends[1]; // Delay send level
+            groove_effects_get(fx);
+            granular_set_fx(&granular_state, sends[0], sends[1],
+                            fx[0], fx[2], fx[3], groove_delay_ticks());
             
             // 1. Live Keyboard Play
             if (controls.keys > 0) {
@@ -112,9 +113,8 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            // Apply track volume and FX send scaling so Reverb/Delay pick up the signal
-            int64_t processed_sample = ((int64_t)gran_sample * gran_vol * (100 + rev_send + dly_send)) / 100;
-            value += (processed_sample * output_gain) >> 6; 
+            // +12dB boosted 24-bit mix gain (>> 4 instead of >> 6)
+            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 4; 
         }
             
         output[i] = usb_frames == -2 ? 0 : limit(value);
