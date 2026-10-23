@@ -132,6 +132,7 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     state->filter_cutoff = 120;
     state->filter_res = 15;
     state->chorus_depth = 30;    // 30% stereo chorus
+    state->volume = 100;         // Default track level 100
 
     state->current_speed = 0x10000;
     state->rng_state = 0x12345678;
@@ -270,6 +271,7 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
 
     // 3. Master ADSR rates from exact milliseconds (0-2000ms) and dB (-60..0dB)
     uint32_t frames_per_ms = state->sample_rate / 1000U; // 32 frames/ms at 32kHz
+    if (frames_per_ms == 0) frames_per_ms = 32U;
     uint32_t att_step = state->env_attack == 0 ? 65535U : (65535U / ((uint32_t)state->env_attack * frames_per_ms));
     uint32_t dec_step = state->env_decay == 0  ? 65535U : (65535U / ((uint32_t)state->env_decay * frames_per_ms));
     uint32_t sus_target = db_to_q16(state->env_sustain);
