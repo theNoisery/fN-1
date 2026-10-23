@@ -4,6 +4,7 @@
 #include "fm1_audio_io.h"
 #include "instrument.h"
 #include "synth/engine_granular.h"
+#include <string.h>
 
 extern unsigned groove_screen_active_track(void);
 extern int groove_screen_octave(void);
@@ -15,11 +16,13 @@ static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 GranularVoiceState granular_state;
 static int granular_is_init = 0;
 
-static uint32_t last_keys = 0;
+static uint8_t key_down_state[27];
 static uint8_t last_seq_note = 255;
 
 void fm1_output_reset(void) { 
-    output_gain = 0; 
+    output_gain = 0;
+    last_seq_note = 255;
+    memset(key_down_state, 0, sizeof(key_down_state));
     granular_init(&granular_state, 32000); 
     granular_is_init = 1;
 }
@@ -74,36 +77,44 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
                             fx[0], fx[2], fx[3], groove_delay_ticks());
             
             int can_play_keys = (t == active_track) || (groove_track_role(t) == GROOVE_TRACK_PLAY);
+            uint32_t current_keys = can_play_keys ? (controls.keys & 0x7FFFFFFU) : 0U;
 
-            // 1. Live Keyboard Play (ONLY when this track is selected or in PLAY role)
-            if (can_play_keys && controls.keys > 0) {
-                if (controls.keys != last_keys) {
-                    for (unsigned k = 0; k < 27; k++) {
-                        if (controls.keys & (1U << k)) {
-                            unsigned note = groove_key_note(t, k, groove_screen_octave());
-                            if (note < 128) granular_note_on(&granular_state, (uint8_t)note, 100);
-                            break;
-                        }
+            // 1. Independent Polyphonic Key State Evaluator (handles lower & higher notes cleanly)
+            int any_key_held = 0;
+            int oct = groove_screen_octave();
+            for (unsigned k = 0; k < 27; k++) {
+                int is_pressed = (current_keys & (1U << k)) != 0;
+                unsigned note = groove_key_note(t, k, oct);
+
+                if (is_pressed) {
+                    any_key_held = 1;
+                    if (!key_down_state[k]) {
+                        key_down_state[k] = 1;
+                        if (note < 128) granular_note_on(&granular_state, (uint8_t)note, 100);
+                    }
+                } else {
+                    if (key_down_state[k]) {
+                        key_down_state[k] = 0;
+                        if (note < 128) granular_note_off(&granular_state, (uint8_t)note);
                     }
                 }
-                last_keys = controls.keys;
-            } else if (last_keys > 0) {
-                granular_note_off(&granular_state, 0);
-                last_keys = 0;
             }
             
-            // 2. Sequencer Playback
-            else if (view.playing) {
-                if (view.step.velocity > 0 && view.step.note != last_seq_note) {
-                    granular_note_on(&granular_state, view.step.note, view.step.velocity);
-                    last_seq_note = view.step.note;
-                } else if (view.step.velocity == 0 && last_seq_note != 255) {
-                    granular_note_off(&granular_state, 0);
+            // 2. Sequencer Playback (when no live keys are held)
+            if (!any_key_held) {
+                if (view.playing) {
+                    if (view.step.velocity > 0 && view.step.note != last_seq_note) {
+                        if (last_seq_note < 128) granular_note_off(&granular_state, last_seq_note);
+                        granular_note_on(&granular_state, view.step.note, view.step.velocity);
+                        last_seq_note = view.step.note;
+                    } else if (view.step.velocity == 0 && last_seq_note != 255) {
+                        granular_note_off(&granular_state, last_seq_note);
+                        last_seq_note = 255;
+                    }
+                } else if (last_seq_note != 255) {
+                    granular_note_off(&granular_state, last_seq_note);
                     last_seq_note = 255;
                 }
-            } else if (last_seq_note != 255) {
-                granular_note_off(&granular_state, 0);
-                last_seq_note = 255;
             }
             break;
         }
