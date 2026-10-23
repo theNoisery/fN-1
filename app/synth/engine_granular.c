@@ -119,7 +119,7 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     state->macro_density = 12;   // 12 grains
     state->macro_spray = 10;     // 10% spray
 
-    // Page 2 Space / Pitch / Polyphony / Chorus defaults
+    // Page 2 Space / Pitch / Polyphony defaults
     state->macro_stereo = 50;    // 50% stereo L/R interval offset & spread
     state->macro_pitch_rnd = 0;  // 0% pitch randomization (locked pitch by default)
     state->poly_voices = 4;      // 4-voice polyphony by default
@@ -131,11 +131,11 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     state->env_sustain = 0;      // 0 dB (full sustain)
     state->env_release = 600;    // 600 ms
 
-    // Page 3 Default Filter (Mode, Cutoff, Resonance/Q, Slope)
+    // Page 3 Default Filter & Slope
     state->filter_mode = GRAN_FILT_LPF;
     state->filter_cutoff = 120;
     state->filter_res = 15;
-    state->filter_slope = 0;     // 0 = 12dB/oct (1 = 24dB/oct, 2 = 36dB/oct)
+    state->filter_slope = 0;     // 0 = 12dB/oct
     state->volume = 100;         // Default track level 100
 
     state->rng_state = 0x12345678;
