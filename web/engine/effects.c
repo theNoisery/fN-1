@@ -1,146 +1,123 @@
 /* SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception */
+/* Browser reverb and delay. */
+#include "mixer.h"
+#include "fixed.h"
 #include "synth/engine_fx.h"
 #include <string.h>
 
-// ---------------------------------------------------------
-// CORE DSP UTILITIES
-// ---------------------------------------------------------
+static TapeDelayEngine global_delay;
+static ReverbEngine global_reverb;
+static int fx_is_init = 0;
+static unsigned quiet_frames = UINT32_MAX;
+static unsigned current_timeout = 0;
+static int32_t global_level = 0;
+static uint32_t last_dly_ms = 0;
 
-static inline int16_t tape_saturate(int32_t x) {
-    if (x > 16384) {
-        int32_t over = x - 16384;
-        return (int16_t)(16384 + ((over * 16383) / (over + 8192)));
-    } else if (x < -16384) {
-        int32_t over = -x - 16384;
-        return (int16_t)(-16384 - ((over * 16383) / (over + 8192)));
+uint8_t custom_rev_type = 0;
+uint8_t custom_rev_size = 85;
+uint8_t custom_rev_decay = 60;
+uint16_t custom_dly_fb_pct = 50;
+
+static uint8_t last_rev_type = 255;
+static uint8_t last_rev_size = 255;
+static uint8_t last_rev_decay = 255;
+static uint16_t last_dly_fb = 65535;
+
+FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, unsigned delay) {
+    if (!fx_is_init) {
+        fx_delay_init(&global_delay);
+        fx_reverb_init(&global_reverb);
+        fx_is_init = 1;
     }
-    return (int16_t)x;
-}
 
-// ---------------------------------------------------------
-// TAPE DELAY (>100% FEEDBACK)
-// ---------------------------------------------------------
-
-void fx_delay_init(TapeDelayEngine *dly) {
-    memset(dly, 0, sizeof(TapeDelayEngine));
-    dly->time_l = 8000;
-    dly->time_r = 8000;
-}
-
-void fx_delay_set(TapeDelayEngine *dly, uint32_t time_ms, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong) {
-    uint32_t samps = (time_ms * 32U);
-    if (samps < 32U) samps = 32U;
-    if (samps >= DLY_MAX_SAMPLES) samps = DLY_MAX_SAMPLES - 1U;
+    global_level = level;
+    last_dly_ms = (delay * 1000U) / FM1_SAMPLE_RATE;
+    current_timeout = delay > 1944U ? delay * 8U * 24U : FM1_SAMPLE_RATE * 8U;
     
-    dly->time_l = samps;
-    dly->time_r = ping_pong ? (samps * 3) / 4 : samps;
-    dly->feedback = (feedback_pct * 256U) / 100U;
-    dly->mix = mix;
-    dly->ping_pong = ping_pong;
+    // Force an update on the next render block
+    last_dly_fb = 65535; 
 }
 
-void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r) {
-    uint32_t read_l = (dly->write_idx + DLY_MAX_SAMPLES - dly->time_l) & (DLY_MAX_SAMPLES - 1);
-    uint32_t read_r = (dly->write_idx + DLY_MAX_SAMPLES - dly->time_r) & (DLY_MAX_SAMPLES - 1);
-
-    int32_t dly_out_l = dly->buf_l[read_l];
-    int32_t dly_out_r = dly->buf_r[read_r];
-
-    int32_t fb_in_l = dly->ping_pong ? dly_out_r : dly_out_l;
-    int32_t fb_in_r = dly->ping_pong ? dly_out_l : dly_out_r;
-
-    int32_t sum_l = *in_l + ((fb_in_l * dly->feedback) >> 8);
-    int32_t sum_r = *in_r + ((fb_in_r * dly->feedback) >> 8);
-
-    dly->buf_l[dly->write_idx] = tape_saturate(sum_l);
-    dly->buf_r[dly->write_idx] = tape_saturate(sum_r);
-    
-    dly->write_idx = (dly->write_idx + 1) & (DLY_MAX_SAMPLES - 1);
-
-    // Because this is used as a SEND effect on the master bus, it must return WET ONLY.
-    *out_l = ((dly_out_l * dly->mix) / 100);
-    *out_r = ((dly_out_r * dly->mix) / 100);
+FM1_DSP_CODE void fm1_fx_clear(void) {
+    if (quiet_frames == UINT32_MAX) return;
+    fx_delay_init(&global_delay);
+    fx_reverb_init(&global_reverb);
+    quiet_frames = UINT32_MAX;
 }
 
-// ---------------------------------------------------------
-// MULTI-ALGO FDN REVERB
-// ---------------------------------------------------------
-
-static const uint16_t rev_primes[3][FDN_LINES] = {
-    { 1423, 1789, 2131, 2459 }, // HALL
-    { 401,  503,  613,  727  }, // PLATE
-    { 787,  883,  1013, 1153 }  // CHAMBER
-};
-
-static const uint16_t ap_primes[3][FDN_LINES] = {
-    { 223, 263, 311, 359 }, // HALL
-    { 541, 659, 761, 887 }, // PLATE
-    { 151, 191, 239, 281 }  // CHAMBER
-};
-
-void fx_reverb_init(ReverbEngine *rev) {
-    memset(rev, 0, sizeof(ReverbEngine));
-    fx_reverb_set(rev, REV_TYPE_HALL, 50, 70, 50, 30);
+FM1_DSP_CODE unsigned fm1_fx_active(void) {
+    return quiet_frames != UINT32_MAX;
 }
 
-void fx_reverb_set(ReverbEngine *rev, uint8_t type, uint8_t size, uint8_t decay, uint8_t er_level, uint8_t mix) {
-    if (type > 2) type = 0;
-    rev->type = type;
-    rev->size = size;
-    rev->decay = decay;
-    rev->mix = mix;
-    rev->er_level = er_level;
+static inline int32_t fm_add_sat32(int32_t a, int32_t b) {
+    int64_t sum = (int64_t)a + b;
+    if (sum > 8388607) return 8388607;
+    if (sum < -8388608) return -8388608;
+    return (int32_t)sum;
+}
 
-    uint32_t scale = 50 + (size * 150) / 100;
+FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *rev, int32_t *dly) {
+    if (!fx_is_init) return;
 
-    for (int i = 0; i < FDN_LINES; i++) {
-        rev->fdn_lengths[i] = (rev_primes[type][i] * scale) / 100;
-        if (rev->fdn_lengths[i] >= FDN_MAX_LEN) rev->fdn_lengths[i] = FDN_MAX_LEN - 1;
-
-        rev->ap_lengths[i] = ap_primes[type][i];
+    unsigned signal = 0;
+    for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
+        if (rev[i] > 167 || rev[i] < -167 || dly[i] > 167 || dly[i] < -167) { 
+            signal = 1; break; 
+        }
     }
-}
 
-void fx_reverb_process(ReverbEngine *rev, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r) {
-    int32_t input = (*in_l + *in_r) >> 1;
-    
-    int32_t ap_coeff = (rev->type == REV_TYPE_PLATE) ? 20480 : 16384; 
-    
-    int32_t diffused = input;
-    for (int i = 0; i < FDN_LINES; i++) {
-        int16_t ap_read = rev->ap_buf[i][rev->ap_idx[i]];
-        int32_t ap_out = ap_read - ((diffused * ap_coeff) >> 15);
-        rev->ap_buf[i][rev->ap_idx[i]] = tape_saturate(diffused + ((ap_out * ap_coeff) >> 15));
+    if (signal) {
+        quiet_frames = 0;
+    } else if (quiet_frames == UINT32_MAX) {
+        return;
+    } else {
+        quiet_frames += FM1_BLOCK_FRAMES;
+        if (quiet_frames >= current_timeout) { 
+            fm1_fx_clear(); 
+            return; 
+        }
+    }
+
+    if (custom_rev_type != last_rev_type || custom_rev_size != last_rev_size || custom_rev_decay != last_rev_decay) {
+        fx_reverb_set(&global_reverb, custom_rev_type, custom_rev_size, custom_rev_decay, 50, 100);
+        last_rev_type = custom_rev_type;
+        last_rev_size = custom_rev_size;
+        last_rev_decay = custom_rev_decay;
+    }
+
+    if (custom_dly_fb_pct != last_dly_fb) {
+        fx_delay_set(&global_delay, last_dly_ms, custom_dly_fb_pct, 100, 1);
+        last_dly_fb = custom_dly_fb_pct;
+    }
+
+    for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
+        // FM1's send busses use raw highly scaled output values. 
+        // We divide by 512 to put them exactly into the comfortable 16-bit range our custom fx algorithms expect.
+        int32_t dly_in = dly[i] / 512;
+        int32_t rev_in = rev[i] / 512;
+
+        int32_t dly_in_l = dly_in;
+        int32_t dly_in_r = dly_in;
+        int32_t dly_out_l = 0;
+        int32_t dly_out_r = 0;
+        fx_delay_process(&global_delay, &dly_in_l, &dly_in_r, &dly_out_l, &dly_out_r);
+
+        // Glue the space together by feeding the delay tail into the reverb network
+        int32_t rev_in_l = rev_in + (dly_out_l / 4);
+        int32_t rev_in_r = rev_in + (dly_out_r / 4);
+        int32_t rev_out_l = 0;
+        int32_t rev_out_r = 0;
+        fx_reverb_process(&global_reverb, &rev_in_l, &rev_in_r, &rev_out_l, &rev_out_r);
+
+        // Re-scale up to the mixer's 24-bit output requirement
+        int32_t out_l = (dly_out_l + rev_out_l) * 512;
+        int32_t out_r = (dly_out_r + rev_out_r) * 512;
         
-        diffused = ap_out;
-        if (++rev->ap_idx[i] >= rev->ap_lengths[i]) rev->ap_idx[i] = 0;
+        // Scale by the master Return level (Q30) via the UI's 'SHARED FX' RETURN knob
+        out_l = fm_mul30(out_l, global_level);
+        out_r = fm_mul30(out_r, global_level);
+
+        left_mix[i] = fm_add_sat32(left_mix[i], out_l);
+        right_mix[i] = fm_add_sat32(right_mix[i], out_r);
     }
-
-    int32_t er_tap = rev->fdn_buf[0][(rev->fdn_idx[0] + FDN_MAX_LEN - (rev->fdn_lengths[0] / 3)) & (FDN_MAX_LEN - 1)];
-
-    int32_t fdn_out[FDN_LINES];
-    for (int i = 0; i < FDN_LINES; i++) {
-        fdn_out[i] = rev->fdn_buf[i][rev->fdn_idx[i]];
-    }
-
-    int32_t fb_gain = (rev->decay * 32112) / 100;
-    int32_t in_matrix[FDN_LINES];
-
-    in_matrix[0] =  fdn_out[0] + fdn_out[1] + fdn_out[2] + fdn_out[3];
-    in_matrix[1] =  fdn_out[0] - fdn_out[1] + fdn_out[2] - fdn_out[3];
-    in_matrix[2] =  fdn_out[0] + fdn_out[1] - fdn_out[2] - fdn_out[3];
-    in_matrix[3] =  fdn_out[0] - fdn_out[1] - fdn_out[2] + fdn_out[3];
-
-    for (int i = 0; i < FDN_LINES; i++) {
-        int32_t fb_signal = (in_matrix[i] * fb_gain) >> 16; 
-        rev->fdn_buf[i][rev->fdn_idx[i]] = tape_saturate(diffused + fb_signal);
-        if (++rev->fdn_idx[i] >= rev->fdn_lengths[i]) rev->fdn_idx[i] = 0;
-    }
-
-    int32_t wet_l = fdn_out[0] - fdn_out[2] + ((er_tap * rev->er_level) >> 7);
-    int32_t wet_r = fdn_out[1] + fdn_out[3] + ((er_tap * rev->er_level) >> 7);
-
-    // Because this is used as a SEND effect on the master bus, it must return WET ONLY.
-    *out_l = ((wet_l * rev->mix) / 100);
-    *out_r = ((wet_r * rev->mix) / 100);
 }
