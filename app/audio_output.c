@@ -79,7 +79,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             int can_play_keys = (t == active_track) || (groove_track_role(t) == GROOVE_TRACK_PLAY);
             uint32_t current_keys = can_play_keys ? (controls.keys & 0x7FFFFFFU) : 0U;
 
-            // 1. Independent Polyphonic Key State Evaluator (handles lower & higher notes cleanly)
+            // 1. Independent Polyphonic Key State Evaluator
             int any_key_held = 0;
             int oct = groove_screen_octave();
             for (unsigned k = 0; k < 27; k++) {
@@ -131,7 +131,8 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 4; 
+            // Standard safe 24-bit headroom scaling (>> 6)
+            value += ((int64_t)gran_sample * gran_vol * output_gain) >> 6; 
         }
             
         output[i] = usb_frames == -2 ? 0 : limit(value);
