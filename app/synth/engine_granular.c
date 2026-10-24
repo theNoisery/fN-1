@@ -324,15 +324,16 @@ static uint32_t randomize_grain_speed(uint32_t base_speed, uint16_t pitch_rnd_pc
 }
 
 static inline int16_t soft_clip(int32_t x) {
-    if (x > 48000) return 32767;
-    if (x < -48000) return -32768;
-    if (x > 24000) {
-        int32_t over = x - 24000;
-        return (int16_t)(24000 + ((over * 8767) / 24000));
+    if (x > 30000) return 32767;
+    if (x < -30000) return -32768;
+    // Smoother headroom curve to prevent clipping on dense chords
+    if (x > 16000) {
+        int32_t over = x - 16000;
+        return (int16_t)(16000 + ((over * 14000) / 14000));
     }
-    if (x < -24000) {
-        int32_t over = x + 24000;
-        return (int16_t)(-24000 + ((over * 8768) / 24000));
+    if (x < -16000) {
+        int32_t over = x + 16000;
+        return (int16_t)(-16000 + ((over * 14000) / 14000));
     }
     return (int16_t)x;
 }
@@ -528,9 +529,10 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             if (g->counter >= g->length) g->active = 0;
         }
 
-        int32_t norm_div = (int32_t)(1U + (per_voice_overlap >> 3) + (active_voices >> 2));
-        int32_t mixed_l = (sum_l * 2) / norm_div;
-        int32_t mixed_r = (sum_r * 2) / norm_div;
+        // Tighter normalization divisor for safer headroom during dense multi-voice chords
+        int32_t norm_div = (int32_t)(2U + (per_voice_overlap >> 2) + (active_voices >> 1));
+        int32_t mixed_l = sum_l / norm_div;
+        int32_t mixed_r = sum_r / norm_div;
 
         // 1. Cascaded Multimode State Variable Filter (12dB / 24dB / 36dB slope)
         if (state->filter_mode != GRAN_FILT_OFF) {
