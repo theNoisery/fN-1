@@ -12,7 +12,7 @@ extern uint8_t  custom_rev_decay;
 extern uint8_t  custom_rev_er;
 extern uint16_t custom_dly_fb_pct;
 extern int8_t   custom_dly_lr_diff;
-extern uint8_t  custom_dly_ping_pong;
+
 
 extern GranularVoiceState granular_state;
 enum {
@@ -1287,7 +1287,7 @@ static __attribute__((noinline)) void effects_draw(void)
     }
     static const char *const local[4] = {"REV SEND", "DLY SEND", "TRK VOL", "ALL RET"};
     static const char *const rev_fx[4] = {"REV TYPE", "REV SIZE", "REV DECAY", "EARLY REF"};
-    static const char *const tape_fx[4] = {"SYNC", "TIME MS", "TAPE FDBK", "L/R DIFF"};
+    static const char *const tape_fx[4] = {"SYNC", "TIME MS", "TAPE FDBK", "PING PONG"};
     static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
     static const char *const rev_types[] = {"HALL", "PLATE", "CHAMBER"};
     const char *const *labels = effects_page == 2 ? tape_fx : effects_page == 1 ? rev_fx : local;
@@ -1328,8 +1328,15 @@ static __attribute__((noinline)) void effects_draw(void)
                 value = custom_dly_fb_pct;
                 decimal(display, (int)value, 1); strcat(display, "%");
             } else {
-                value = (unsigned)(custom_dly_lr_diff + 50);
-                decimal(display, (int)custom_dly_lr_diff, 1); strcat(display, "%");
+                // This is i == 3 (Knob 4: PING PONG & L/R DIFF)
+                value = (unsigned)(custom_dly_lr_diff + 51);
+                if (custom_dly_lr_diff <= -51) {
+                    strcpy(display, "OFF");
+                } else {
+                    strcpy(display, "PP ");
+                    decimal(display + 3, (int)custom_dly_lr_diff, 1);
+                    strcat(display, "%");
+                }
             }
         } else {
             decimal(display, (int)value, 1);
@@ -2534,7 +2541,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         groove_effects_edit(4, controls->encoders[2]); // SYNC ON/OFF
                         groove_effects_edit(1, controls->encoders[3]); // TIME MS / DIVISION
                         if (controls->encoders[4]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[4] * 2, 0, 150);
-                        if (controls->encoders[5]) custom_dly_lr_diff = (int8_t)clamp((int)custom_dly_lr_diff + controls->encoders[5], -50, 50);
+                        if (controls->encoders[5]) custom_dly_lr_diff = (int8_t)clamp((int)custom_dly_lr_diff + controls->encoders[5], -51, 50);
                     } else if (effects_page == 1) {
                         if (controls->encoders[2]) custom_rev_type = (uint8_t)clamp((int)custom_rev_type + (controls->encoders[2] > 0 ? 1 : -1), 0, 2);
                         if (controls->encoders[3]) custom_rev_size = (uint8_t)clamp((int)custom_rev_size + controls->encoders[3] * 2, 0, 100);
