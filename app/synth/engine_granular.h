@@ -61,6 +61,7 @@ typedef struct {
     uint16_t macro_stereo;
     uint16_t macro_pitch_rnd;
     uint8_t  poly_voices;
+    uint8_t  chorus_depth;
 
     // Master ADSR Envelope: Attack/Decay/Release in ms (0-2000), Sustain in dB (-60 to 0)
     uint16_t env_attack;
@@ -73,18 +74,11 @@ typedef struct {
     uint8_t filter_cutoff; // 0-127
     uint8_t filter_res;    // 0-127
     uint8_t filter_slope;  // 0=12dB, 1=24dB, 2=36dB
-    uint8_t chorus_depth;  // 0-100%
     int32_t svf_low_l[3], svf_band_l[3];
     int32_t svf_low_r[3], svf_band_r[3];
 
-    // Track volume (0-100) and Live FX Bus settings synced from the FX screen
+    // Track volume (0-100)
     uint8_t volume;
-    uint8_t rev_send;
-    uint8_t dly_send;
-    uint8_t rev_time;
-    uint8_t dly_feedback;
-    uint8_t fx_return;
-    uint32_t dly_samples;
 
     uint32_t voice_age_counter;
     uint32_t rng_state;
@@ -99,8 +93,6 @@ void granular_set_macro(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_space(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_env(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_filter(void *state, uint8_t knob_idx, int16_t val);
-void granular_set_fx(void *state, uint8_t rev_send, uint8_t dly_send,
-                     uint8_t rev_time, uint8_t dly_fb, uint8_t fx_ret, uint32_t dly_ticks);
 void granular_render_block(void *state, int16_t *out_l, int16_t *out_r, size_t frames);
 void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length);
 void granular_set_active_slot(uint8_t slot);
