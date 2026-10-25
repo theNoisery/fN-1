@@ -16,6 +16,10 @@ static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 GranularVoiceState granular_state;
 static int granular_is_init = 0;
 
+// Shared send buses to feed the Granular track into the Global FX engine (effects.c)
+int32_t gran_fx_rev_bus[FM1_BLOCK_FRAMES];
+int32_t gran_fx_dly_bus[FM1_BLOCK_FRAMES];
+
 static uint8_t key_down_state[27];
 static uint8_t last_seq_note = 255;
 
@@ -23,6 +27,8 @@ void fm1_output_reset(void) {
     output_gain = 0;
     last_seq_note = 255;
     memset(key_down_state, 0, sizeof(key_down_state));
+    memset(gran_fx_rev_bus, 0, sizeof(gran_fx_rev_bus));
+    memset(gran_fx_dly_bus, 0, sizeof(gran_fx_dly_bus));
     granular_init(&granular_state, 32000); 
     granular_is_init = 1;
 }
@@ -55,6 +61,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     
     int granular_active = 0;
     unsigned gran_vol = 0;
+    uint8_t gran_sends[2] = {0, 0};
     
     struct fm1_controls controls;
     fm1_controls_read(&controls);
@@ -67,14 +74,7 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             groove_get_view(t, 0, &view);
             
             gran_vol = view.muted ? 0 : granular_state.volume;
-            
-            // Sync live Reverb & Delay settings from the FX screen
-            uint8_t sends[2] = {0, 0};
-            uint8_t fx[4] = {0, 0, 0, 0};
-            groove_sends_get(t, sends);
-            groove_effects_get(fx);
-            granular_set_fx(&granular_state, sends[0], sends[1],
-                            fx[0], fx[2], fx[3], groove_delay_ticks());
+            groove_sends_get(t, gran_sends);
             
             int can_play_keys = (t == active_track) || (groove_track_role(t) == GROOVE_TRACK_PLAY);
             uint32_t current_keys = can_play_keys ? (controls.keys & 0x7FFFFFFU) : 0U;
@@ -122,6 +122,15 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     
     if (granular_active) {
         granular_render_block(&granular_state, gran_l, gran_r, FM1_BLOCK_FRAMES);
+        // Feed the Granular track's REV SEND and DLY SEND into the Global FX bus
+        for (unsigned f = 0; f < FM1_BLOCK_FRAMES; ++f) {
+            int32_t mono = (((int32_t)gran_l[f] + (int32_t)gran_r[f]) * (int32_t)gran_vol) / 200;
+            gran_fx_rev_bus[f] = (mono * (int32_t)gran_sends[0] * 512) / 15;
+            gran_fx_dly_bus[f] = (mono * (int32_t)gran_sends[1] * 512) / 15;
+        }
+    } else {
+        memset(gran_fx_rev_bus, 0, sizeof(gran_fx_rev_bus));
+        memset(gran_fx_dly_bus, 0, sizeof(gran_fx_dly_bus));
     }
 
     for (unsigned i = 0; i < FM1_BLOCK_WORDS; ++i) {
@@ -131,7 +140,6 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
             
         if (granular_active && gran_vol > 0) {
             int16_t gran_sample = (i & 1U) ? gran_r[i >> 1] : gran_l[i >> 1];
-            // Standard safe 24-bit headroom scaling (>> 6)
             value += ((int64_t)gran_sample * gran_vol * output_gain) >> 6; 
         }
             
