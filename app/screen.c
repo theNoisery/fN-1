@@ -6,10 +6,13 @@
 #include "synth/engine_granular.h"
 #include <string.h>
 
-extern uint8_t custom_rev_type;
-extern uint8_t custom_rev_size;
-extern uint8_t custom_rev_decay;
+extern uint8_t  custom_rev_type;
+extern uint8_t  custom_rev_size;
+extern uint8_t  custom_rev_decay;
+extern uint8_t  custom_rev_er;
 extern uint16_t custom_dly_fb_pct;
+extern int8_t   custom_dly_lr_diff;
+extern uint8_t  custom_dly_ping_pong;
 
 extern GranularVoiceState granular_state;
 enum {
@@ -1273,41 +1276,57 @@ static __attribute__((noinline)) void effects_draw(void)
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(8, 40, 224, 36, BACK);
-        if (effects_page == 3) text(8, 40, "CUSTOM TAPE FX", 1, TEXT, BACK);
+        if (effects_page == 4) text(8, 40, "TAPE DELAY / L-R DIFF", 1, TEXT, BACK);
+        else if (effects_page == 3) text(8, 40, "FDN REVERB / SPACE", 1, TEXT, BACK);
         else if (effects_page) text(8, 40, effects_page == 2 ? "DELAY / SEQ TAP" : "SHARED FX / ALL TRACKS", 1, TEXT, BACK);
         else {
             text(8, 40, "TRACK", 1, TEXT, BACK);
             number(44, 40, track + 1U, 1, 1, ACCENT, BACK);
             text(60, 40, source_names[frame_views[track].type], 1, TEXT, BACK);
         }
-        text(8, 64, "PRESETS: TRACK / SHARED / DELAY / TAPE", 1, DIM, BACK);
+        text(8, 64, "PRESETS: TRK/SHD/DLY/REV/TAPE", 1, DIM, BACK);
     }
     static const char *const shared[4] = {"REV TIME", "DLY TIME", "FEEDBACK", "RETURN"};
     static const char *const local[4] = {"REV SEND", "DLY SEND", "TRK VOL", "ALL RET"};
     static const char *const delay[4] = {"SYNC", "TIME MS", "BPM", "FEEDBACK"};
     static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
-    static const char *const tape_fx[] = {"REV TYPE", "REV SIZE", "REV DECAY", "TAPE FDBK"};
+    static const char *const rev_fx[4] = {"REV TYPE", "REV SIZE", "REV DECAY", "EARLY REF"};
+    static const char *const tape_fx[4] = {"TAPE FDBK", "L/R DIFF", "PING PONG", "ALL RET"};
     static const char *const rev_types[] = {"HALL", "PLATE", "CHAMBER"};
-    const char *const *labels = effects_page == 3 ? tape_fx : effects_page == 2 ? delay : effects_page ? shared : local;
+    const char *const *labels = effects_page == 4 ? tape_fx : effects_page == 3 ? rev_fx : effects_page == 2 ? delay : effects_page ? shared : local;
     for (unsigned i = 0; i < 4; ++i) {
         unsigned value = effects_page == 2 && !i ? values[1] : values[i], synced = groove_delay_synced(values[1]);
         const char *label = labels[i];
         char display[12];
         
         if (effects_page == 3) {
-             if (i == 0) {
-                 strcpy(display, rev_types[custom_rev_type > 2 ? 2 : custom_rev_type]);
-                 value = custom_rev_type;
-             } else if (i == 1) {
-                 value = custom_rev_size;
-                 decimal(display, value, 1); strcat(display, "%");
-             } else if (i == 2) {
-                 value = custom_rev_decay;
-                 decimal(display, value, 1); strcat(display, "%");
-             } else {
-                 value = custom_dly_fb_pct;
-                 decimal(display, value, 1); strcat(display, "%");
-             }
+            if (i == 0) {
+                strcpy(display, rev_types[custom_rev_type > 2 ? 2 : custom_rev_type]);
+                value = custom_rev_type;
+            } else if (i == 1) {
+                value = custom_rev_size;
+                decimal(display, (int)value, 1); strcat(display, "%");
+            } else if (i == 2) {
+                value = custom_rev_decay;
+                decimal(display, (int)value, 1); strcat(display, "%");
+            } else {
+                value = custom_rev_er;
+                decimal(display, (int)value, 1); strcat(display, "%");
+            }
+        } else if (effects_page == 4) {
+            if (i == 0) {
+                value = custom_dly_fb_pct;
+                decimal(display, (int)value, 1); strcat(display, "%");
+            } else if (i == 1) {
+                value = (unsigned)(custom_dly_lr_diff + 50);
+                decimal(display, (int)custom_dly_lr_diff, 1); strcat(display, "%");
+            } else if (i == 2) {
+                value = custom_dly_ping_pong;
+                strcpy(display, custom_dly_ping_pong ? "ON" : "OFF");
+            } else {
+                value = values[3];
+                decimal(display, (int)value, 1);
+            }
         } else if (effects_page == 2 && !i) strcpy(display, synced ? "ON" : "OFF");
         else if (effects_page && i == 1 && synced) {
             label = "DIVISION"; strcpy(display, division[values[1] - GROOVE_DELAY_SYNC]);
@@ -1318,14 +1337,13 @@ static __attribute__((noinline)) void effects_draw(void)
             else if (effects_page == 2) value = i == 2 ? frame_views[track].tempo : values[2];
             decimal(display, (int)value, 1);
         }
-        /* Knob cache covers labels as well as values when FREE/SYNC changes. */
         uint32_t cache_sig = value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17) | (effects_page << 24);
         if (cache->row_cache[i] != cache_sig) {
             cache->row_cache[i] = cache_sig;
             paint_fill(8, 88 + i * 22, 224, 18, BACK);
             text(8, 91 + i * 22, label, 1, TEXT, BACK);
             text(164, 91 + i * 22, display, 1, ACCENT, BACK);
-            if (effects_page && i == 1 && !synced) text(190, 91 + i * 22, "MS", 1, DIM, BACK);
+            if ((effects_page == 1 || effects_page == 2) && i == 1 && !synced) text(190, 91 + i * 22, "MS", 1, DIM, BACK);
             if (!effects_page && i < 2) text(190, 91 + i * 22, "%", 1, DIM, BACK);
         }
         knob(i, label, display, colors[i]);
@@ -2512,14 +2530,19 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     for (unsigned i = 0; i < 3; ++i) groove_fm_edit(track, parameters[i], controls->encoders[2 + i]);
                     edit_track_volume(track, controls->encoders[5]);
                 } else if (page == EFFECTS) {
-                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 3);
+                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 4);
                     if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
                     
-                    if (effects_page == 3) {
+                    if (effects_page == 4) {
+                        if (controls->encoders[2]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[2] * 2, 0, 150);
+                        if (controls->encoders[3]) custom_dly_lr_diff = (int8_t)clamp((int)custom_dly_lr_diff + controls->encoders[3], -50, 50);
+                        if (controls->encoders[4]) custom_dly_ping_pong = (uint8_t)clamp((int)custom_dly_ping_pong + (controls->encoders[4] > 0 ? 1 : -1), 0, 1);
+                        if (controls->encoders[5]) groove_effects_edit(3, controls->encoders[5]);
+                    } else if (effects_page == 3) {
                         if (controls->encoders[2]) custom_rev_type = (uint8_t)clamp((int)custom_rev_type + (controls->encoders[2] > 0 ? 1 : -1), 0, 2);
                         if (controls->encoders[3]) custom_rev_size = (uint8_t)clamp((int)custom_rev_size + controls->encoders[3] * 2, 0, 100);
                         if (controls->encoders[4]) custom_rev_decay = (uint8_t)clamp((int)custom_rev_decay + controls->encoders[4] * 2, 0, 100);
-                        if (controls->encoders[5]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[5] * 2, 0, 150);
+                        if (controls->encoders[5]) custom_rev_er = (uint8_t)clamp((int)custom_rev_er + controls->encoders[5] * 2, 0, 100);
                     } else if (effects_page == 2) {
                         groove_effects_edit(4, controls->encoders[2]);
                         groove_effects_edit(1, controls->encoders[3]);
