@@ -12,14 +12,15 @@ enum {
 };
 
 // --- TAPE DELAY ---
-#define DLY_MAX_SAMPLES 32768 // ~1.02 seconds at 32kHz
+#define DLY_MAX_SAMPLES 65536 // ~1.48 seconds at 44.1kHz
 
 typedef struct {
     uint32_t time_l;
     uint32_t time_r;
-    uint16_t feedback; // 0 to 150% (Scaled: 0 to 384)
-    uint8_t  mix;      // 0 to 100
+    uint16_t feedback;  // 0 to 150% (Scaled: 0 to 384)
+    uint8_t  mix;       // 0 to 100
     uint8_t  ping_pong; // 0 or 1
+    int8_t   lr_diff;   // -50% to +50% L/R time offset
     
     int16_t  buf_l[DLY_MAX_SAMPLES];
     int16_t  buf_r[DLY_MAX_SAMPLES];
@@ -28,7 +29,7 @@ typedef struct {
 
 // --- MULTI-ALGO REVERB (FDN) ---
 #define FDN_LINES 4
-#define FDN_MAX_LEN 4096 // ~128ms max per line
+#define FDN_MAX_LEN 4096
 #define AP_MAX_LEN 1024
 
 typedef struct {
@@ -47,12 +48,11 @@ typedef struct {
     uint32_t fdn_idx[FDN_LINES];
     uint32_t ap_idx[FDN_LINES];
     
-    // LFO for modulation to prevent ringing
     uint32_t lfo_phase;
 } ReverbEngine;
 
 void fx_delay_init(TapeDelayEngine *dly);
-void fx_delay_set(TapeDelayEngine *dly, uint32_t time_ms, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong);
+void fx_delay_set(TapeDelayEngine *dly, uint32_t delay_samples, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong, int8_t lr_diff);
 void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r);
 
 void fx_reverb_init(ReverbEngine *rev);
