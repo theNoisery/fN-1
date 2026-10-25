@@ -5,6 +5,9 @@
 #include "synth/engine_fx.h"
 #include <string.h>
 
+extern int32_t gran_fx_rev_bus[FM1_BLOCK_FRAMES];
+extern int32_t gran_fx_dly_bus[FM1_BLOCK_FRAMES];
+
 static TapeDelayEngine global_delay;
 static ReverbEngine global_reverb;
 static int fx_is_init = 0;
@@ -70,7 +73,9 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
 
     unsigned signal = 0;
     for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
-        if (rev[i] > 167 || rev[i] < -167 || dly[i] > 167 || dly[i] < -167) { 
+        int32_t r_tot = rev[i] + gran_fx_rev_bus[i];
+        int32_t d_tot = dly[i] + gran_fx_dly_bus[i];
+        if (r_tot > 167 || r_tot < -167 || d_tot > 167 || d_tot < -167) { 
             signal = 1; break; 
         }
     }
@@ -106,8 +111,8 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
     }
 
     for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
-        int32_t dly_in = dly[i] / 512;
-        int32_t rev_in = rev[i] / 512;
+        int32_t dly_in = (dly[i] + gran_fx_dly_bus[i]) / 512;
+        int32_t rev_in = (rev[i] + gran_fx_rev_bus[i]) / 512;
 
         int32_t dly_in_l = dly_in;
         int32_t dly_in_r = dly_in;
