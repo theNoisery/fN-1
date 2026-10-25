@@ -6,6 +6,11 @@
 #include "synth/engine_granular.h"
 #include <string.h>
 
+extern uint8_t custom_rev_type;
+extern uint8_t custom_rev_size;
+extern uint8_t custom_rev_decay;
+extern uint16_t custom_dly_fb_pct;
+
 extern GranularVoiceState granular_state;
 enum {
     BACK = 0x0000,
@@ -767,7 +772,7 @@ static __attribute__((noinline, cold, minsize)) void fm_draw(const uint8_t patch
                 int y = 166 - patch[offset + 4 + i] * 64 / 99;
                 int next = x + 8 + (99 - patch[offset + i]) * 32 / 99;
                 line(x, last_y, next, y, colors[track]);
-                paint_fill((unsigned)next - 2, (unsigned)y - 2, 5, 5, TEXT);
+                paint_fill((unsignednext - 2, (unsigned)y - 2, 5, 5, TEXT);
                 x = next;
                 last_y = y;
             }
@@ -913,7 +918,6 @@ static __attribute__((noinline)) void tone_draw(const uint8_t values[GROOVE_TONE
         memset(cache->tile_cache, 0xff, sizeof cache->tile_cache);
     }
 
-    // Draw horizontal parameter bars for Granular (Cloud, Filter/Chorus, and Master ADSR)
     if (type == GROOVE_GRANULAR) {
         paint_fill(150, 56, 90, 8, BACK);
         text(150, 56, "SAMPLE SLOT:", 1, DIM, BACK);
@@ -1269,24 +1273,42 @@ static __attribute__((noinline)) void effects_draw(void)
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(8, 40, 224, 36, BACK);
-        if (effects_page) text(8, 40, effects_page == 2 ? "DELAY / SEQ TAP" : "SHARED FX / ALL TRACKS", 1, TEXT, BACK);
+        if (effects_page == 3) text(8, 40, "CUSTOM TAPE FX", 1, TEXT, BACK);
+        else if (effects_page) text(8, 40, effects_page == 2 ? "DELAY / SEQ TAP" : "SHARED FX / ALL TRACKS", 1, TEXT, BACK);
         else {
             text(8, 40, "TRACK", 1, TEXT, BACK);
             number(44, 40, track + 1U, 1, 1, ACCENT, BACK);
             text(60, 40, source_names[frame_views[track].type], 1, TEXT, BACK);
         }
-        text(8, 64, "PRESETS: TRACK / SHARED / DELAY", 1, DIM, BACK);
+        text(8, 64, "PRESETS: TRACK / SHARED / DELAY / TAPE", 1, DIM, BACK);
     }
     static const char *const shared[4] = {"REV TIME", "DLY TIME", "FEEDBACK", "RETURN"};
     static const char *const local[4] = {"REV SEND", "DLY SEND", "TRK VOL", "ALL RET"};
     static const char *const delay[4] = {"SYNC", "TIME MS", "BPM", "FEEDBACK"};
     static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
-    const char *const *labels = effects_page == 2 ? delay : effects_page ? shared : local;
+    static const char *const tape_fx[] = {"REV TYPE", "REV SIZE", "REV DECAY", "TAPE FDBK"};
+    static const char *const rev_types[] = {"HALL", "PLATE", "CHAMBER"};
+    const char *const *labels = effects_page == 3 ? tape_fx : effects_page == 2 ? delay : effects_page ? shared : local;
     for (unsigned i = 0; i < 4; ++i) {
         unsigned value = effects_page == 2 && !i ? values[1] : values[i], synced = groove_delay_synced(values[1]);
         const char *label = labels[i];
         char display[12];
-        if (effects_page == 2 && !i) strcpy(display, synced ? "ON" : "OFF");
+        
+        if (effects_page == 3) {
+             if (i == 0) {
+                 strcpy(display, rev_types[custom_rev_type > 2 ? 2 : custom_rev_type]);
+                 value = custom_rev_type;
+             } else if (i == 1) {
+                 value = custom_rev_size;
+                 decimal(display, value, 1); strcat(display, "%");
+             } else if (i == 2) {
+                 value = custom_rev_decay;
+                 decimal(display, value, 1); strcat(display, "%");
+             } else {
+                 value = custom_dly_fb_pct;
+                 decimal(display, value, 1); strcat(display, "%");
+             }
+        } else if (effects_page == 2 && !i) strcpy(display, synced ? "ON" : "OFF");
         else if (effects_page && i == 1 && synced) {
             label = "DIVISION"; strcpy(display, division[values[1] - GROOVE_DELAY_SYNC]);
         } else if (effects_page == 2 && i == 2 && frame_views[track].clock_mode) {
@@ -1297,8 +1319,9 @@ static __attribute__((noinline)) void effects_draw(void)
             decimal(display, (int)value, 1);
         }
         /* Knob cache covers labels as well as values when FREE/SYNC changes. */
-        if (cache->row_cache[i] != (value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17))) {
-            cache->row_cache[i] = (value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17));
+        uint32_t cache_sig = value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17) | (effects_page << 24);
+        if (cache->row_cache[i] != cache_sig) {
+            cache->row_cache[i] = cache_sig;
             paint_fill(8, 88 + i * 22, 224, 18, BACK);
             text(8, 91 + i * 22, label, 1, TEXT, BACK);
             text(164, 91 + i * 22, display, 1, ACCENT, BACK);
@@ -2489,9 +2512,15 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     for (unsigned i = 0; i < 3; ++i) groove_fm_edit(track, parameters[i], controls->encoders[2 + i]);
                     edit_track_volume(track, controls->encoders[5]);
                 } else if (page == EFFECTS) {
-                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 2);
+                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 3);
                     if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
-                    if (effects_page == 2) {
+                    
+                    if (effects_page == 3) {
+                        if (controls->encoders[2]) custom_rev_type = (uint8_t)clamp((int)custom_rev_type + (controls->encoders[2] > 0 ? 1 : -1), 0, 2);
+                        if (controls->encoders[3]) custom_rev_size = (uint8_t)clamp((int)custom_rev_size + controls->encoders[3] * 2, 0, 100);
+                        if (controls->encoders[4]) custom_rev_decay = (uint8_t)clamp((int)custom_rev_decay + controls->encoders[4] * 2, 0, 100);
+                        if (controls->encoders[5]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[5] * 2, 0, 150);
+                    } else if (effects_page == 2) {
                         groove_effects_edit(4, controls->encoders[2]);
                         groove_effects_edit(1, controls->encoders[3]);
                         groove_tempo_edit(controls->encoders[4]);
@@ -3035,7 +3064,7 @@ const void *groove_screen_web_targets(void)
             web_target(188, 33, 40, 17, 6, 0, track, "PARAMETER PAGE", tone_pages[track][tone_slot()] + 1, NULL);
     } else if (page == EFFECTS) {
         for (unsigned col = 0; col < 4; ++col) web_alias(6, 86 + col * 22, 204, 20, col);
-        web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 2 ? "DELAY" : effects_page ? "SHARED" : "TRACK");
+        web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 3 ? "CUSTOM TAPE FX" : effects_page == 2 ? "DELAY" : effects_page ? "SHARED" : "TRACK");
     } else if (page == MIX) {
         for (unsigned i = 0; i < 16; ++i) {
             struct groove_view row; groove_get_view(i & 7U, cursor, &row);
