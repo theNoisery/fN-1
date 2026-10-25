@@ -21,8 +21,7 @@ uint8_t  custom_rev_size = 85;
 uint8_t  custom_rev_decay = 60;
 uint8_t  custom_rev_er = 50;
 uint16_t custom_dly_fb_pct = 50;
-int8_t   custom_dly_lr_diff = 0;   // -50% to +50% (0% = locked tempo sync)
-uint8_t  custom_dly_ping_pong = 1; // 0 = Stereo, 1 = Ping-Pong
+int8_t   custom_dly_lr_diff = 0; // -51 = Ping-Pong OFF; -50 to +50 = Ping-Pong ON with L/R Diff %
 
 static uint8_t  last_rev_type = 255;
 static uint8_t  last_rev_size = 255;
@@ -31,7 +30,6 @@ static uint8_t  last_rev_er = 255;
 static uint16_t last_dly_fb = 65535;
 static uint32_t last_dly_samples = 0;
 static int8_t   last_dly_lr_diff = 127;
-static uint8_t  last_dly_ping_pong = 255;
 
 FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, unsigned delay) {
     (void)decay;
@@ -44,16 +42,21 @@ FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, uns
     }
 
     global_level = level;
-    // 'delay' is passed in 1/8th-rate ticks (for both Free MS and BPM Tempo Sync).
-    // Multiply by 8 to get the exact full-rate sample count!
     target_dly_samples = delay * 8U;
     current_timeout = delay > 1944U ? delay * 8U * 24U : FM1_SAMPLE_RATE * 8U;
 }
 
 FM1_DSP_CODE void fm1_fx_clear(void) {
     if (quiet_frames == UINT32_MAX) return;
-    fx_delay_init(&global_delay);
-    fx_reverb_init(&global_reverb);
+    // Only clear the audio sample buffers — NEVER wipe the configured parameters!
+    memset(global_delay.buf_l, 0, sizeof(global_delay.buf_l));
+    memset(global_delay.buf_r, 0, sizeof(global_delay.buf_r));
+    memset(global_reverb.fdn_buf, 0, sizeof(global_reverb.fdn_buf));
+    memset(global_reverb.ap_buf, 0, sizeof(global_reverb.ap_buf));
+    
+    // Force parameter re-sync on wake-up just in case
+    last_rev_type = 255;
+    last_dly_fb = 65535;
     quiet_frames = UINT32_MAX;
 }
 
@@ -84,12 +87,6 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         quiet_frames = 0;
     } else if (quiet_frames == UINT32_MAX) {
         return;
-    } else {
-        quiet_frames += FM1_BLOCK_FRAMES;
-        if (quiet_frames >= current_timeout) { 
-            fm1_fx_clear(); 
-            return; 
-        }
     }
 
     if (custom_rev_type != last_rev_type || custom_rev_size != last_rev_size ||
@@ -102,13 +99,16 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
     }
 
     if (custom_dly_fb_pct != last_dly_fb || target_dly_samples != last_dly_samples ||
-        custom_dly_lr_diff != last_dly_lr_diff || custom_dly_ping_pong != last_dly_ping_pong) {
-        fx_delay_set(&global_delay, target_dly_samples, custom_dly_fb_pct, 100, custom_dly_ping_pong, custom_dly_lr_diff);
+        custom_dly_lr_diff != last_dly_lr_diff) {
+        uint8_t pp_on = (custom_dly_lr_diff > -51) ? 1U : 0U;
+        int8_t  diff_pct = pp_on ? custom_dly_lr_diff : 0;
+        fx_delay_set(&global_delay, target_dly_samples, custom_dly_fb_pct, 100, pp_on, diff_pct);
         last_dly_fb = custom_dly_fb_pct;
         last_dly_samples = target_dly_samples;
         last_dly_lr_diff = custom_dly_lr_diff;
-        last_dly_ping_pong = custom_dly_ping_pong;
     }
+
+    unsigned wet_active = 0;
 
     for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
         int32_t dly_in = (dly[i] + gran_fx_dly_bus[i]) / 512;
@@ -126,6 +126,12 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         int32_t rev_out_r = 0;
         fx_reverb_process(&global_reverb, &rev_in_l, &rev_in_r, &rev_out_l, &rev_out_r);
 
+        // Check if the delay/reverb tail is still ringing (e.g. >100% feedback self-oscillation)
+        if (dly_out_l > 2 || dly_out_l < -2 || dly_out_r > 2 || dly_out_r < -2 ||
+            rev_out_l > 2 || rev_out_l < -2 || rev_out_r > 2 || rev_out_r < -2) {
+            wet_active = 1;
+        }
+
         int32_t out_l = (dly_out_l + rev_out_l) * 512;
         int32_t out_r = (dly_out_r + rev_out_r) * 512;
         
@@ -134,5 +140,15 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
 
         left_mix[i] = fm_add_sat32(left_mix[i], out_l);
         right_mix[i] = fm_add_sat32(right_mix[i], out_r);
+    }
+
+    // Only advance the sleep timer if BOTH the input and the wet tails are silent!
+    if (wet_active) {
+        quiet_frames = 0;
+    } else if (!signal) {
+        quiet_frames += FM1_BLOCK_FRAMES;
+        if (quiet_frames >= current_timeout) {
+            fm1_fx_clear();
+        }
     }
 }
