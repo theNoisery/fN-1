@@ -18,22 +18,24 @@ static inline int16_t tape_saturate(int32_t x) {
 }
 
 // ---------------------------------------------------------
-// TAPE DELAY (>100% FEEDBACK)
+// TAPE DELAY (>100% FEEDBACK & EXACT TEMPO SYNC)
 // ---------------------------------------------------------
 
 void fx_delay_init(TapeDelayEngine *dly) {
     memset(dly, 0, sizeof(TapeDelayEngine));
-    dly->time_l = 8000;
-    dly->time_r = 8000;
+    dly->time_l = 11025; // Default 250ms at 44.1kHz
+    dly->time_r = 11025;
 }
 
-void fx_delay_set(TapeDelayEngine *dly, uint32_t time_ms, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong) {
-    uint32_t samps = (time_ms * 32U);
-    if (samps < 32U) samps = 32U;
+// Note: 'delay_samples' is now passed as exact native audio frames (delay_ticks * 8)
+void fx_delay_set(TapeDelayEngine *dly, uint32_t delay_samples, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong) {
+    uint32_t samps = delay_samples;
+    if (samps < 64U) samps = 64U;
     if (samps >= DLY_MAX_SAMPLES) samps = DLY_MAX_SAMPLES - 1U;
     
+    // Both L and R use the exact synced sample length so repeats stay locked to BPM
     dly->time_l = samps;
-    dly->time_r = ping_pong ? (samps * 3) / 4 : samps;
+    dly->time_r = samps;
     dly->feedback = (feedback_pct * 256U) / 100U;
     dly->mix = mix;
     dly->ping_pong = ping_pong;
@@ -46,18 +48,23 @@ void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_
     int32_t dly_out_l = dly->buf_l[read_l];
     int32_t dly_out_r = dly->buf_r[read_r];
 
-    int32_t fb_in_l = dly->ping_pong ? dly_out_r : dly_out_l;
-    int32_t fb_in_r = dly->ping_pong ? dly_out_l : dly_out_r;
-
-    int32_t sum_l = *in_l + ((fb_in_l * dly->feedback) >> 8);
-    int32_t sum_r = *in_r + ((fb_in_r * dly->feedback) >> 8);
+    int32_t sum_l, sum_r;
+    if (dly->ping_pong) {
+        // True tempo-synced Ping-Pong: Input enters L, L feeds R, R feeds back into L
+        int32_t mono_in = (*in_l + *in_r) >> 1;
+        sum_l = mono_in + ((dly_out_r * dly->feedback) >> 8);
+        sum_r = ((dly_out_l * dly->feedback) >> 8);
+    } else {
+        sum_l = *in_l + ((dly_out_l * dly->feedback) >> 8);
+        sum_r = *in_r + ((dly_out_r * dly->feedback) >> 8);
+    }
 
     dly->buf_l[dly->write_idx] = tape_saturate(sum_l);
     dly->buf_r[dly->write_idx] = tape_saturate(sum_r);
     
     dly->write_idx = (dly->write_idx + 1) & (DLY_MAX_SAMPLES - 1);
 
-    // Because this is used as a SEND effect on the master bus, it must return WET ONLY.
+    // Return WET ONLY for the master send bus
     *out_l = ((dly_out_l * dly->mix) / 100);
     *out_r = ((dly_out_r * dly->mix) / 100);
 }
@@ -140,7 +147,7 @@ void fx_reverb_process(ReverbEngine *rev, int32_t *in_l, int32_t *in_r, int32_t 
     int32_t wet_l = fdn_out[0] - fdn_out[2] + ((er_tap * rev->er_level) >> 7);
     int32_t wet_r = fdn_out[1] + fdn_out[3] + ((er_tap * rev->er_level) >> 7);
 
-    // Because this is used as a SEND effect on the master bus, it must return WET ONLY.
+    // Return WET ONLY for the master send bus
     *out_l = ((wet_l * rev->mix) / 100);
     *out_r = ((wet_r * rev->mix) / 100);
 }
