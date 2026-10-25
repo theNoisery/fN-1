@@ -3087,7 +3087,7 @@ const void *groove_screen_web_targets(void)
             web_target(188, 33, 40, 17, 6, 0, track, "PARAMETER PAGE", tone_pages[track][tone_slot()] + 1, NULL);
     } else if (page == EFFECTS) {
         for (unsigned col = 0; col < 4; ++col) web_alias(6, 86 + col * 22, 204, 20, col);
-        web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 3 ? "CUSTOM TAPE FX" : effects_page == 2 ? "DELAY" : effects_page ? "SHARED" : "TRACK");
+        web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 4 ? "TAPE DELAY" : effects_page == 3 ? "FDN REVERB" : effects_page == 2 ? "DELAY" : effects_page ? "SHARED" : "TRACK");
     } else if (page == MIX) {
         for (unsigned i = 0; i < 16; ++i) {
             struct groove_view row; groove_get_view(i & 7U, cursor, &row);
