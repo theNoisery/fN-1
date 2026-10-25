@@ -13,16 +13,22 @@ static unsigned current_timeout = 0;
 static int32_t global_level = 0;
 static uint32_t target_dly_samples = 11025;
 
-uint8_t custom_rev_type = 0;
-uint8_t custom_rev_size = 85;
-uint8_t custom_rev_decay = 60;
+uint8_t  custom_rev_type = 0;
+uint8_t  custom_rev_size = 85;
+uint8_t  custom_rev_decay = 60;
+uint8_t  custom_rev_er = 50;
 uint16_t custom_dly_fb_pct = 50;
+int8_t   custom_dly_lr_diff = 0;   // -50% to +50% (0% = locked tempo sync)
+uint8_t  custom_dly_ping_pong = 1; // 0 = Stereo, 1 = Ping-Pong
 
-static uint8_t last_rev_type = 255;
-static uint8_t last_rev_size = 255;
-static uint8_t last_rev_decay = 255;
+static uint8_t  last_rev_type = 255;
+static uint8_t  last_rev_size = 255;
+static uint8_t  last_rev_decay = 255;
+static uint8_t  last_rev_er = 255;
 static uint16_t last_dly_fb = 65535;
 static uint32_t last_dly_samples = 0;
+static int8_t   last_dly_lr_diff = 127;
+static uint8_t  last_dly_ping_pong = 255;
 
 FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, unsigned delay) {
     (void)decay;
@@ -35,7 +41,7 @@ FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, uns
     }
 
     global_level = level;
-    // 'delay' is passed in 1/8th-rate ticks (both Free MS and Tempo Sync divisions).
+    // 'delay' is passed in 1/8th-rate ticks (for both Free MS and BPM Tempo Sync).
     // Multiply by 8 to get the exact full-rate sample count!
     target_dly_samples = delay * 8U;
     current_timeout = delay > 1944U ? delay * 8U * 24U : FM1_SAMPLE_RATE * 8U;
@@ -81,17 +87,22 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         }
     }
 
-    if (custom_rev_type != last_rev_type || custom_rev_size != last_rev_size || custom_rev_decay != last_rev_decay) {
-        fx_reverb_set(&global_reverb, custom_rev_type, custom_rev_size, custom_rev_decay, 50, 100);
+    if (custom_rev_type != last_rev_type || custom_rev_size != last_rev_size ||
+        custom_rev_decay != last_rev_decay || custom_rev_er != last_rev_er) {
+        fx_reverb_set(&global_reverb, custom_rev_type, custom_rev_size, custom_rev_decay, custom_rev_er, 100);
         last_rev_type = custom_rev_type;
         last_rev_size = custom_rev_size;
         last_rev_decay = custom_rev_decay;
+        last_rev_er = custom_rev_er;
     }
 
-    if (custom_dly_fb_pct != last_dly_fb || target_dly_samples != last_dly_samples) {
-        fx_delay_set(&global_delay, target_dly_samples, custom_dly_fb_pct, 100, 1);
+    if (custom_dly_fb_pct != last_dly_fb || target_dly_samples != last_dly_samples ||
+        custom_dly_lr_diff != last_dly_lr_diff || custom_dly_ping_pong != last_dly_ping_pong) {
+        fx_delay_set(&global_delay, target_dly_samples, custom_dly_fb_pct, 100, custom_dly_ping_pong, custom_dly_lr_diff);
         last_dly_fb = custom_dly_fb_pct;
         last_dly_samples = target_dly_samples;
+        last_dly_lr_diff = custom_dly_lr_diff;
+        last_dly_ping_pong = custom_dly_ping_pong;
     }
 
     for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
@@ -104,7 +115,6 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         int32_t dly_out_r = 0;
         fx_delay_process(&global_delay, &dly_in_l, &dly_in_r, &dly_out_l, &dly_out_r);
 
-        // Only feed delay into reverb when the track's reverb send or delay is active
         int32_t rev_in_l = rev_in + (dly_out_l / 8);
         int32_t rev_in_r = rev_in + (dly_out_r / 8);
         int32_t rev_out_l = 0;
