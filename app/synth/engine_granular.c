@@ -21,27 +21,11 @@ static uint8_t active_sample_slot = 0;
 static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
 static uint32_t decoded_length = 0;
 
-// Dedicated FX buffers (Chorus, Stereo Delay, Schroeder Stereo Reverb)
 #define CHORUS_BUF_LEN 1024
 static int16_t chorus_buf_l[CHORUS_BUF_LEN];
 static int16_t chorus_buf_r[CHORUS_BUF_LEN];
 static uint32_t chorus_write_idx = 0;
 static uint32_t chorus_lfo_phase = 0;
-
-#define DELAY_BUF_LEN 16384
-static int16_t delay_buf_l[DELAY_BUF_LEN];
-static int16_t delay_buf_r[DELAY_BUF_LEN];
-static uint32_t delay_write_idx = 0;
-
-#define COMB1_LEN 1116
-#define COMB2_LEN 1188
-#define COMB3_LEN 1277
-#define COMB4_LEN 1356
-#define AP1_LEN   556
-#define AP2_LEN   441
-static int16_t rev_c1[COMB1_LEN], rev_c2[COMB2_LEN], rev_c3[COMB3_LEN], rev_c4[COMB4_LEN];
-static int16_t rev_ap1[AP1_LEN], rev_ap2[AP2_LEN];
-static uint16_t idx_c1 = 0, idx_c2 = 0, idx_c3 = 0, idx_c4 = 0, idx_ap1 = 0, idx_ap2 = 0;
 
 static void granular_decode_to_ram(void) {
     const uint8_t *data = global_samples[active_sample_slot];
@@ -184,20 +168,6 @@ void granular_set_filter(void *state_ptr, uint8_t knob_idx, int16_t val) {
     else if (knob_idx == 3) state->filter_slope = (uint8_t)(val < 0 ? 0 : val > 2 ? 2 : val);
 }
 
-void granular_set_fx(void *state_ptr, uint8_t rev_send, uint8_t dly_send,
-                     uint8_t rev_time, uint8_t dly_fb, uint8_t fx_ret, uint32_t dly_ticks) {
-    GranularVoiceState *state = (GranularVoiceState *)state_ptr;
-    state->rev_send = rev_send;
-    state->dly_send = dly_send;
-    state->rev_time = rev_time;
-    state->dly_feedback = dly_fb;
-    state->fx_return = fx_ret;
-    uint32_t samps = (dly_ticks * 32U) / 44U;
-    if (samps < 256U) samps = 256U;
-    if (samps >= DELAY_BUF_LEN - 32U) samps = DELAY_BUF_LEN - 32U;
-    state->dly_samples = samps;
-}
-
 static uint32_t note_to_speed(uint8_t note) {
     static const uint32_t pitch_table[12] = {
         65536, 69433, 73562, 77936, 82570, 87481,
@@ -326,15 +296,6 @@ static uint32_t randomize_grain_speed(uint32_t base_speed, uint16_t pitch_rnd_pc
 static inline int16_t soft_clip(int32_t x) {
     if (x > 30000) return 32767;
     if (x < -30000) return -32768;
-    // Smoother headroom curve to prevent clipping on dense chords
-    if (x > 16000) {
-        int32_t over = x - 16000;
-        return (int16_t)(16000 + ((over * 14000) / 14000));
-    }
-    if (x < -16000) {
-        int32_t over = x + 16000;
-        return (int16_t)(-16000 + ((over * 14000) / 14000));
-    }
     return (int16_t)x;
 }
 
@@ -400,17 +361,10 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
     if (dec_step == 0) dec_step = 1U;
     if (rel_step == 0) rel_step = 1U;
 
-    // Filter coefficients & slope stages (0 = 12dB, 1 = 24dB, 2 = 36dB)
     int32_t svf_f = 512 + ((int32_t)state->filter_cutoff * 185);
     int32_t svf_q = 32767 - ((int32_t)state->filter_res * 225);
     int32_t svf_q_follower = svf_q + ((32767 - svf_q) >> 1);
     uint8_t filter_stages = state->filter_slope > 2 ? 2 : state->filter_slope;
-
-    int32_t rev_fb = 19000 + ((int32_t)state->rev_time * 95);
-    if (rev_fb > 31200) rev_fb = 31200;
-    int32_t dly_fb = ((int32_t)state->dly_feedback * 290);
-    if (dly_fb > 29500) dly_fb = 29500;
-    uint32_t dly_len = state->dly_samples ? state->dly_samples : 9600U;
 
     uint32_t max_start = decoded_length > grain_len ? (decoded_length - grain_len) : 1U;
     uint32_t scan_pct = state->macro_scan < 1 ? 1 : state->macro_scan > 100 ? 100 : state->macro_scan;
@@ -529,7 +483,6 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             if (g->counter >= g->length) g->active = 0;
         }
 
-        // Tighter normalization divisor for safer headroom during dense multi-voice chords
         int32_t norm_div = (int32_t)(2U + (per_voice_overlap >> 2) + (active_voices >> 1));
         int32_t mixed_l = sum_l / norm_div;
         int32_t mixed_r = sum_r / norm_div;
@@ -580,65 +533,8 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             chorus_write_idx = (chorus_write_idx + 1U) & (CHORUS_BUF_LEN - 1U);
         }
 
-        int32_t dry_l = soft_clip(mixed_l);
-        int32_t dry_r = soft_clip(mixed_r);
-
-        // 3. Stereo Delay
-        int32_t dly_out_l = 0, dly_out_r = 0;
-        if (state->dly_send > 0) {
-            uint32_t read_idx = (delay_write_idx + DELAY_BUF_LEN - dly_len) & (DELAY_BUF_LEN - 1U);
-            dly_out_l = delay_buf_l[read_idx];
-            dly_out_r = delay_buf_r[read_idx];
-
-            int32_t send_l = (dry_l * (int32_t)state->dly_send) >> 4;
-            int32_t send_r = (dry_r * (int32_t)state->dly_send) >> 4;
-
-            delay_buf_l[delay_write_idx] = soft_clip(send_l + ((dly_out_r * dly_fb) >> 15));
-            delay_buf_r[delay_write_idx] = soft_clip(send_r + ((dly_out_l * dly_fb) >> 15));
-            delay_write_idx = (delay_write_idx + 1U) & (DELAY_BUF_LEN - 1U);
-        }
-
-        // 4. Stereo Lush Reverb
-        int32_t rev_out_l = 0, rev_out_r = 0;
-        if (state->rev_send > 0) {
-            int32_t rev_in = (((dry_l + dry_r) >> 1) * (int32_t)state->rev_send) >> 5;
-            rev_in += ((dly_out_l + dly_out_r) >> 3);
-
-            int16_t c1 = rev_c1[idx_c1]; rev_c1[idx_c1] = soft_clip(rev_in + ((c1 * rev_fb) >> 15));
-            if (++idx_c1 >= COMB1_LEN) idx_c1 = 0;
-
-            int16_t c2 = rev_c2[idx_c2]; rev_c2[idx_c2] = soft_clip(rev_in + ((c2 * rev_fb) >> 15));
-            if (++idx_c2 >= COMB2_LEN) idx_c2 = 0;
-
-            int16_t c3 = rev_c3[idx_c3]; rev_c3[idx_c3] = soft_clip(rev_in + ((c3 * rev_fb) >> 15));
-            if (++idx_c3 >= COMB3_LEN) idx_c3 = 0;
-
-            int16_t c4 = rev_c4[idx_c4]; rev_c4[idx_c4] = soft_clip(rev_in + ((c4 * rev_fb) >> 15));
-            if (++idx_c4 >= COMB4_LEN) idx_c4 = 0;
-
-            int32_t comb_sum = (c1 + c2 + c3 + c4) >> 1;
-
-            int16_t b1 = rev_ap1[idx_ap1];
-            int32_t a1 = comb_sum + (b1 >> 1);
-            rev_ap1[idx_ap1] = soft_clip(a1);
-            int32_t ap1_out = b1 - (a1 >> 1);
-            if (++idx_ap1 >= AP1_LEN) idx_ap1 = 0;
-
-            int16_t b2 = rev_ap2[idx_ap2];
-            int32_t a2 = ap1_out + (b2 >> 1);
-            rev_ap2[idx_ap2] = soft_clip(a2);
-            int32_t ap2_out = b2 - (a2 >> 1);
-            if (++idx_ap2 >= AP2_LEN) idx_ap2 = 0;
-
-            rev_out_l = ap2_out + ((c1 - c3) >> 2);
-            rev_out_r = ap2_out - ((c2 - c4) >> 2);
-        }
-
-        int32_t ret_gain = state->fx_return ? state->fx_return : 100;
-        int32_t wet_l = ((dly_out_l + rev_out_l) * ret_gain) / 100;
-        int32_t wet_r = ((dly_out_r + rev_out_r) * ret_gain) / 100;
-
-        out_l[f] = soft_clip(dry_l + wet_l);
-        out_r[f] = soft_clip(dry_r + wet_r);
+        // Output pure dry stereo audio (Reverb & Delay are handled globally by effects.c!)
+        out_l[f] = soft_clip(mixed_l);
+        out_r[f] = soft_clip(mixed_r);
     }
 }
