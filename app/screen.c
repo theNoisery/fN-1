@@ -1276,30 +1276,28 @@ static __attribute__((noinline)) void effects_draw(void)
     if (cache->title_cache != title) {
         cache->title_cache = title;
         paint_fill(8, 40, 224, 36, BACK);
-        if (effects_page == 4) text(8, 40, "TAPE DELAY / L-R DIFF", 1, TEXT, BACK);
-        else if (effects_page == 3) text(8, 40, "FDN REVERB / SPACE", 1, TEXT, BACK);
-        else if (effects_page) text(8, 40, effects_page == 2 ? "DELAY / SEQ TAP" : "SHARED FX / ALL TRACKS", 1, TEXT, BACK);
+        if (effects_page == 2) text(8, 40, "3/3 TAPE DELAY", 1, TEXT, BACK);
+        else if (effects_page == 1) text(8, 40, "2/3 FDN REVERB", 1, TEXT, BACK);
         else {
-            text(8, 40, "TRACK", 1, TEXT, BACK);
-            number(44, 40, track + 1U, 1, 1, ACCENT, BACK);
-            text(60, 40, source_names[frame_views[track].type], 1, TEXT, BACK);
+            text(8, 40, "1/3 TRACK", 1, TEXT, BACK);
+            number(68, 40, track + 1U, 1, 1, ACCENT, BACK);
+            text(84, 40, source_names[frame_views[track].type], 1, TEXT, BACK);
         }
-        text(8, 64, "PRESETS: TRK/SHD/DLY/REV/TAPE", 1, DIM, BACK);
+        text(8, 64, "PRESETS: TRACK / REVERB / DELAY", 1, DIM, BACK);
     }
-    static const char *const shared[4] = {"REV TIME", "DLY TIME", "FEEDBACK", "RETURN"};
     static const char *const local[4] = {"REV SEND", "DLY SEND", "TRK VOL", "ALL RET"};
-    static const char *const delay[4] = {"SYNC", "TIME MS", "BPM", "FEEDBACK"};
-    static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
     static const char *const rev_fx[4] = {"REV TYPE", "REV SIZE", "REV DECAY", "EARLY REF"};
-    static const char *const tape_fx[4] = {"TAPE FDBK", "L/R DIFF", "PING PONG", "ALL RET"};
+    static const char *const tape_fx[4] = {"SYNC", "TIME MS", "TAPE FDBK", "L/R DIFF"};
+    static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
     static const char *const rev_types[] = {"HALL", "PLATE", "CHAMBER"};
-    const char *const *labels = effects_page == 4 ? tape_fx : effects_page == 3 ? rev_fx : effects_page == 2 ? delay : effects_page ? shared : local;
+    const char *const *labels = effects_page == 2 ? tape_fx : effects_page == 1 ? rev_fx : local;
     for (unsigned i = 0; i < 4; ++i) {
-        unsigned value = effects_page == 2 && !i ? values[1] : values[i], synced = groove_delay_synced(values[1]);
+        unsigned synced = groove_delay_synced(values[1]);
+        unsigned value = values[i];
         const char *label = labels[i];
         char display[12];
         
-        if (effects_page == 3) {
+        if (effects_page == 1) {
             if (i == 0) {
                 strcpy(display, rev_types[custom_rev_type > 2 ? 2 : custom_rev_type]);
                 value = custom_rev_type;
@@ -1313,28 +1311,27 @@ static __attribute__((noinline)) void effects_draw(void)
                 value = custom_rev_er;
                 decimal(display, (int)value, 1); strcat(display, "%");
             }
-        } else if (effects_page == 4) {
+        } else if (effects_page == 2) {
             if (i == 0) {
+                value = synced;
+                strcpy(display, synced ? "ON" : "OFF");
+            } else if (i == 1) {
+                if (synced) {
+                    label = "DIVISION";
+                    strcpy(display, division[values[1] - GROOVE_DELAY_SYNC]);
+                    value = values[1];
+                } else {
+                    value = (groove_delay_ticks() * 80U + 220U) / 441U;
+                    decimal(display, (int)value, 1);
+                }
+            } else if (i == 2) {
                 value = custom_dly_fb_pct;
                 decimal(display, (int)value, 1); strcat(display, "%");
-            } else if (i == 1) {
+            } else {
                 value = (unsigned)(custom_dly_lr_diff + 50);
                 decimal(display, (int)custom_dly_lr_diff, 1); strcat(display, "%");
-            } else if (i == 2) {
-                value = custom_dly_ping_pong;
-                strcpy(display, custom_dly_ping_pong ? "ON" : "OFF");
-            } else {
-                value = values[3];
-                decimal(display, (int)value, 1);
             }
-        } else if (effects_page == 2 && !i) strcpy(display, synced ? "ON" : "OFF");
-        else if (effects_page && i == 1 && synced) {
-            label = "DIVISION"; strcpy(display, division[values[1] - GROOVE_DELAY_SYNC]);
-        } else if (effects_page == 2 && i == 2 && frame_views[track].clock_mode) {
-            strcpy(display, "MIDI");
         } else {
-            if (effects_page && i == 1) value = (groove_delay_ticks() * 80U + 220U) / 441U;
-            else if (effects_page == 2) value = i == 2 ? frame_views[track].tempo : values[2];
             decimal(display, (int)value, 1);
         }
         uint32_t cache_sig = value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17) | (effects_page << 24);
@@ -1343,7 +1340,7 @@ static __attribute__((noinline)) void effects_draw(void)
             paint_fill(8, 88 + i * 22, 224, 18, BACK);
             text(8, 91 + i * 22, label, 1, TEXT, BACK);
             text(164, 91 + i * 22, display, 1, ACCENT, BACK);
-            if ((effects_page == 1 || effects_page == 2) && i == 1 && !synced) text(190, 91 + i * 22, "MS", 1, DIM, BACK);
+            if (effects_page == 2 && i == 1 && !synced) text(190, 91 + i * 22, "MS", 1, DIM, BACK);
             if (!effects_page && i < 2) text(190, 91 + i * 22, "%", 1, DIM, BACK);
         }
         knob(i, label, display, colors[i]);
@@ -2530,27 +2527,19 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     for (unsigned i = 0; i < 3; ++i) groove_fm_edit(track, parameters[i], controls->encoders[2 + i]);
                     edit_track_volume(track, controls->encoders[5]);
                 } else if (page == EFFECTS) {
-                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 4);
+                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 2);
                     if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
                     
-                    if (effects_page == 4) {
-                        if (controls->encoders[2]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[2] * 2, 0, 150);
-                        if (controls->encoders[3]) custom_dly_lr_diff = (int8_t)clamp((int)custom_dly_lr_diff + controls->encoders[3], -50, 50);
-                        if (controls->encoders[4]) custom_dly_ping_pong = (uint8_t)clamp((int)custom_dly_ping_pong + (controls->encoders[4] > 0 ? 1 : -1), 0, 1);
-                        if (controls->encoders[5]) groove_effects_edit(3, controls->encoders[5]);
-                    } else if (effects_page == 3) {
+                    if (effects_page == 2) {
+                        groove_effects_edit(4, controls->encoders[2]); // SYNC ON/OFF
+                        groove_effects_edit(1, controls->encoders[3]); // TIME MS / DIVISION
+                        if (controls->encoders[4]) custom_dly_fb_pct = (uint16_t)clamp((int)custom_dly_fb_pct + controls->encoders[4] * 2, 0, 150);
+                        if (controls->encoders[5]) custom_dly_lr_diff = (int8_t)clamp((int)custom_dly_lr_diff + controls->encoders[5], -50, 50);
+                    } else if (effects_page == 1) {
                         if (controls->encoders[2]) custom_rev_type = (uint8_t)clamp((int)custom_rev_type + (controls->encoders[2] > 0 ? 1 : -1), 0, 2);
                         if (controls->encoders[3]) custom_rev_size = (uint8_t)clamp((int)custom_rev_size + controls->encoders[3] * 2, 0, 100);
                         if (controls->encoders[4]) custom_rev_decay = (uint8_t)clamp((int)custom_rev_decay + controls->encoders[4] * 2, 0, 100);
                         if (controls->encoders[5]) custom_rev_er = (uint8_t)clamp((int)custom_rev_er + controls->encoders[5] * 2, 0, 100);
-                    } else if (effects_page == 2) {
-                        groove_effects_edit(4, controls->encoders[2]);
-                        groove_effects_edit(1, controls->encoders[3]);
-                        groove_tempo_edit(controls->encoders[4]);
-                        groove_effects_edit(2, controls->encoders[5]);
-                    } else if (effects_page) {
-                        for (unsigned i = 0; i < 4; ++i)
-                            groove_effects_edit(i, controls->encoders[2 + i]);
                     } else {
                         for (unsigned i = 0; i < 2; ++i)
                             groove_sends_edit(track, i, controls->encoders[2 + i]);
@@ -3019,7 +3008,6 @@ unsigned groove_screen_web_mask(void)
     }
     if ((page == OVERVIEW || (page == STEPS && !seq_page)) && groove_clock_mode()) mask &= ~8U;
     if (page == STEPS && seq_page == 4 && groove_clock_mode()) mask &= ~2U;
-    if (page == EFFECTS && effects_page == 2 && groove_clock_mode()) mask &= ~4U;
     if (page == RHYTHM) mask &= 7U; /* Fixed 1/16 quantization is a readout. */
     return mask;
 }
@@ -3086,8 +3074,8 @@ const void *groove_screen_web_targets(void)
         if (page == TONE_EDIT && (type == GROOVE_GRANULAR || (advanced_edit && groove_tone_count(track, tone_part()) > 4)))
             web_target(188, 33, 40, 17, 6, 0, track, "PARAMETER PAGE", tone_pages[track][tone_slot()] + 1, NULL);
     } else if (page == EFFECTS) {
-        for (unsigned col = 0; col < 4; ++col) web_alias(6, 86 + col * 22, 204, 20, col);
-        web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 4 ? "TAPE DELAY" : effects_page == 3 ? "FDN REVERB" : effects_page == 2 ? "DELAY" : effects_page ? "SHARED" : "TRACK");
+    for (unsigned col = 0; col < 4; ++col) web_alias(6, 86 + col * 22, 204, 20, col);
+    web_target(6, 59, 228, 18, 6, 6, track, "FX PAGE", effects_page, effects_page == 2 ? "DELAY" : effects_page == 1 ? "REVERB" : "TRACK");
     } else if (page == MIX) {
         for (unsigned i = 0; i < 16; ++i) {
             struct groove_view row; groove_get_view(i & 7U, cursor, &row);
