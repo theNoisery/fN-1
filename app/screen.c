@@ -772,7 +772,7 @@ static __attribute__((noinline, cold, minsize)) void fm_draw(const uint8_t patch
                 int y = 166 - patch[offset + 4 + i] * 64 / 99;
                 int next = x + 8 + (99 - patch[offset + i]) * 32 / 99;
                 line(x, last_y, next, y, colors[track]);
-                paint_fill((unsignednext - 2, (unsigned)y - 2, 5, 5, TEXT);
+                paint_fill((unsigned)next - 2, (unsigned)y - 2, 5, 5, TEXT);
                 x = next;
                 last_y = y;
             }
