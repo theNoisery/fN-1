@@ -24,6 +24,9 @@ static uint8_t last_rev_decay = 255;
 static uint16_t last_dly_fb = 65535;
 
 FM1_DSP_CODE void fm1_fx_set(int32_t decay, int32_t feedback, int32_t level, unsigned delay) {
+    (void)decay;
+    (void)feedback;
+    
     if (!fx_is_init) {
         fx_delay_init(&global_delay);
         fx_reverb_init(&global_reverb);
