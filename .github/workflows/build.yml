@@ -1,85 +1,60 @@
-name: Build fN-1 Firmware & Workbench
+name: Build FM1 Firmware
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-fn1:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 15
-
     steps:
-      - name: Checkout fN-1 repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache JieLi PI32v2 Toolchain & WASI SDK
-        id: cache-toolchains
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\JL
-            build\wasi-sdk
-          key: jieli-2.5.3-wasi-v5-${{ hashFiles('sdk/manifest.json') }}
-
-      - name: Download & Unpack JieLi Toolchain
-        if: steps.cache-toolchains.outputs.cache-hit != 'true'
+      - name: Download and Setup JieLi Toolchain 2.5.3
         shell: pwsh
         run: |
-          Write-Host "Downloading JieLi Windows Toolchain..."
-          curl.exe -L --retry 3 "https://pkgman.jieliapp.com/s/win-toolchain" -o jieli-toolchain.exe
-          New-Item -ItemType Directory -Force -Path "C:\JL_extracted" | Out-Null
-          7z x jieli-toolchain.exe -o"C:\JL_extracted" -y | Out-Null
-          $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
-          if (-not $clangFile) {
-            choco install innoextract -y --no-progress | Out-Null
-            innoextract -e jieli-toolchain.exe -d "C:\JL_extracted"
-            $clangFile = Get-ChildItem -Path "C:\JL_extracted" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "pi32" } | Select-Object -First 1
-          }
-          if ($clangFile) {
-            $pi32Root = $clangFile.Directory.Parent.FullName
+          Write-Host "Downloading JieLi Toolchain 2.5.3..."
+          curl.exe -L --retry 3 "https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe" -o jl_installer.exe
+
+          # Extract directly using 7-Zip (pre-installed on windows-latest)
+          Write-Host "Extracting installer archive..."
+          7z x jl_installer.exe -o"C:\JL_temp" -y | Out-Null
+
+          # Locate the pi32 folder inside the extracted contents
+          $foundClang = Get-ChildItem -Path "C:\JL_temp" -Filter "clang.exe" -Recurse | Select-Object -First 1
+          if ($foundClang) {
+            $pi32Folder = $foundClang.Directory.Parent.FullName
+            Write-Host "Found toolchain at: $pi32Folder"
             New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
-            Copy-Item -Path $pi32Root -Destination "C:\JL\pi32" -Recurse -Force
+            Copy-Item -Path $pi32Folder -Destination "C:\JL\pi32" -Recurse -Force
           } else {
-            throw "Could not find clang.exe inside extracted archive."
+            # Try running the silent installer if 7-zip nested files differently
+            Write-Host "Running fallback installer execution..."
+            Start-Process -FilePath ".\jl_installer.exe" -ArgumentList "/S", "/D=C:\JL" -Wait
           }
 
-      - name: Build Browser Preview & Hardware Firmware (.fwsc)
+          if (!(Test-Path "C:\JL\pi32\bin\clang.exe")) {
+            throw "Failed to locate C:\JL\pi32\bin\clang.exe. Toolchain setup failed."
+          }
+
+          $hash = (Get-FileHash -Path "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Toolchain clang.exe SHA-256: $hash"
+
+      - name: Build Firmware and Web Installer
         shell: pwsh
         env:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
+          FM1_SOURCE_URL: "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip"
         run: |
-          # 1. Build the browser simulator web preview successfully
-          powershell -NoProfile -ExecutionPolicy Bypass -File "tools\Build-Web.ps1" -LocalPreview
+          .\build.bat --package
 
-          # 2. Compile firmware binary directly using the JieLi Clang toolchain
-          Write-Host "Compiling firmware with JieLi Clang..."
-          if (Test-Path "app") {
-            Set-Location "app"
-            if (Test-Path "build.bat") {
-              cmd.exe /c build.bat
-            } else {
-              # Direct clang compilation fallback
-              & "C:\JL\pi32\bin\clang.exe" --version
-            }
-            Set-Location ".."
-          }
-
-          # Ensure output directory exists and create a dummy .fwsc if needed for artifact upload
-          New-Item -ItemType Directory -Force -Path "build\dx7\generated" | Out-Null
-          if (-not (Test-Path "build\dx7\generated\FM1_OFFICIAL_OPEN.fwsc")) {
-            Copy-Item "build\preview\index.html" "build\dx7\generated\FM1_OFFICIAL_OPEN.fwsc" -Force
-          }
-
-      - name: Upload Compiled Firmware & Workbench Artifacts
+      - name: Upload Flashable Firmware
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: fN-1-firmware-and-workbench
+          name: FM1-Custom-Firmware
           path: |
-            build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
             build/official-web/FM1-Official-Open-Source.html
-            build/preview/
-          if-no-files-found: error
+            build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
+            build/**/*.fwsc
