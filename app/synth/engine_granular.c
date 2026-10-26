@@ -22,7 +22,7 @@ static const uint8_t *global_samples[16] = {NULL};
 static uint32_t global_lengths[16] = {0};
 static uint8_t active_sample_slot = 0;
 
-#define MAX_RAM_FRAMES 16384
+#define MAX_RAM_FRAMES 8192
 static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
 static uint32_t decoded_length = 0;
 
