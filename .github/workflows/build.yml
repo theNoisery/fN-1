@@ -17,25 +17,33 @@ jobs:
           Write-Host "Downloading JieLi Toolchain 2.5.3..."
           curl.exe -L --retry 3 "https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe" -o jl_installer.exe
 
-          # Extract directly using 7-Zip (pre-installed on windows-latest)
           Write-Host "Extracting installer archive..."
-          7z x jl_installer.exe -o"C:\JL_temp" -y | Out-Null
+          # Install innoextract via chocolatey in case 2.5.3.exe is an Inno Setup installer
+          choco install innoextract -y --no-progress | Out-Null
 
-          # Locate the pi32 folder inside the extracted contents
-          $foundClang = Get-ChildItem -Path "C:\JL_temp" -Filter "clang.exe" -Recurse | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path "C:\JL_temp" | Out-Null
+          
+          # Try 7z first
+          7z x jl_installer.exe -o"C:\JL_temp\7z" -y | Out-Null
+          
+          # Try innoextract
+          & innoextract -d "C:\JL_temp\inno" jl_installer.exe | Out-Null
+
+          # Search for clang.exe in either extraction
+          $foundClang = Get-ChildItem -Path "C:\JL_temp" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
           if ($foundClang) {
             $pi32Folder = $foundClang.Directory.Parent.FullName
             Write-Host "Found toolchain at: $pi32Folder"
             New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
             Copy-Item -Path $pi32Folder -Destination "C:\JL\pi32" -Recurse -Force
           } else {
-            # Try running the silent installer if 7-zip nested files differently
-            Write-Host "Running fallback installer execution..."
-            Start-Process -FilePath ".\jl_installer.exe" -ArgumentList "/S", "/D=C:\JL" -Wait
+            Get-ChildItem -Path "C:\JL_temp" -Recurse | Select-Object -First 30 FullName
+            throw "Could not locate clang.exe in extracted archive files."
           }
 
           if (!(Test-Path "C:\JL\pi32\bin\clang.exe")) {
-            throw "Failed to locate C:\JL\pi32\bin\clang.exe. Toolchain setup failed."
+            throw "Failed to locate C:\JL\pi32\bin\clang.exe."
           }
 
           $hash = (Get-FileHash -Path "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256).Hash.ToLower()
