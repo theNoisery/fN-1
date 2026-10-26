@@ -3,6 +3,7 @@
 #include <string.h>
 
 // Define these globally for the hardware firmware build
+#ifndef __wasm__
 int32_t custom_dly_lr_diff = 0;
 int32_t custom_rev_type = 0;
 int32_t custom_rev_decay = 50;
@@ -12,6 +13,7 @@ int32_t custom_dly_fb_pct = 50;
 int32_t custom_dly_time = 250;
 int32_t custom_rev_mix = 30;
 int32_t custom_dly_mix = 30;
+#endif
 
 // ---------------------------------------------------------
 // CORE DSP UTILITIES
