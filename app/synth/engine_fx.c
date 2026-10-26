@@ -31,13 +31,15 @@ static inline int16_t clean_clamp16(int32_t x) {
 }
 
 // ---------------------------------------------------------
-// TAPE DELAY (>100% FEEDBACK, WARM LP FILTER & DC BLOCKER)
+// TAPE DELAY (VARISPEED PITCH-SHIFTING TIME SWEEPS)
 // ---------------------------------------------------------
 
 void fx_delay_init(TapeDelayEngine *dly) {
     memset(dly, 0, sizeof(TapeDelayEngine));
-    dly->time_l = 11025; // Default 250ms at 44.1kHz
-    dly->time_r = 11025;
+    dly->target_time_l = 11025;
+    dly->target_time_r = 11025;
+    dly->current_time_l = 11025 << 16;
+    dly->current_time_r = 11025 << 16;
 }
 
 void fx_delay_set(TapeDelayEngine *dly, uint32_t delay_samples, uint16_t feedback_pct, uint8_t mix, uint8_t ping_pong, int8_t lr_diff) {
@@ -50,8 +52,8 @@ void fx_delay_set(TapeDelayEngine *dly, uint32_t delay_samples, uint16_t feedbac
     if (samps_r < 64U) samps_r = 64U;
     if (samps_r >= DLY_MAX_SAMPLES) samps_r = DLY_MAX_SAMPLES - 1U;
 
-    dly->time_l = samps_l;
-    dly->time_r = samps_r;
+    dly->target_time_l = samps_l;
+    dly->target_time_r = samps_r;
     dly->feedback = (feedback_pct * 256U) / 100U;
     dly->mix = mix;
     dly->ping_pong = ping_pong;
@@ -59,21 +61,38 @@ void fx_delay_set(TapeDelayEngine *dly, uint32_t delay_samples, uint16_t feedbac
 }
 
 void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r) {
-    uint32_t read_l = (dly->write_idx + DLY_MAX_SAMPLES - dly->time_l) & (DLY_MAX_SAMPLES - 1);
-    uint32_t read_r = (dly->write_idx + DLY_MAX_SAMPLES - dly->time_r) & (DLY_MAX_SAMPLES - 1);
+    // Smooth glide for delay time changes (creates the varispeed tape pitch-bend effect!)
+    dly->current_time_l += ((int32_t)((dly->target_time_l << 16) - dly->current_time_l)) >> 9;
+    dly->current_time_r += ((int32_t)((dly->target_time_r << 16) - dly->current_time_r)) >> 9;
 
-    int32_t dly_out_l = dly->buf_l[read_l];
-    int32_t dly_out_r = dly->buf_r[read_r];
+    uint32_t time_l_q16 = (uint32_t)dly->current_time_l;
+    uint32_t time_r_q16 = (uint32_t)dly->current_time_r;
 
-    // 1. One-pole warm tape low-pass filter inside the feedback path (~4.5kHz roll-off)
-    // Removes harsh digital fizz and quantization crackle on every repeat!
+    // Calculate fractional read positions in the circular buffer
+    uint32_t base_idx_l = (dly->write_idx + DLY_MAX_SAMPLES - (time_l_q16 >> 16)) & (DLY_MAX_SAMPLES - 1);
+    uint32_t frac_l = time_l_q16 & 0xFFFFU;
+    uint32_t prev_idx_l = (base_idx_l + DLY_MAX_SAMPLES - 1) & (DLY_MAX_SAMPLES - 1);
+
+    uint32_t base_idx_r = (dly->write_idx + DLY_MAX_SAMPLES - (time_r_q16 >> 16)) & (DLY_MAX_SAMPLES - 1);
+    uint32_t frac_r = time_r_q16 & 0xFFFFU;
+    uint32_t prev_idx_r = (base_idx_r + DLY_MAX_SAMPLES - 1) & (DLY_MAX_SAMPLES - 1);
+
+    // Linear interpolation between adjacent samples for smooth pitch gliding
+    int32_t s0_l = dly->buf_l[base_idx_l];
+    int32_t s1_l = dly->buf_l[prev_idx_l];
+    int32_t dly_out_l = s0_l + (((s1_l - s0_l) * (int32_t)frac_l) >> 16);
+
+    int32_t s0_r = dly->buf_r[base_idx_r];
+    int32_t s1_r = dly->buf_r[prev_idx_r];
+    int32_t dly_out_r = s0_r + (((s1_r - s0_r) * (int32_t)frac_r) >> 16);
+
+    // Warm tape low-pass filter
     dly->lp_l += ((dly_out_l - dly->lp_l) * 140) >> 8;
     dly->lp_r += ((dly_out_r - dly->lp_r) * 140) >> 8;
 
     int32_t filt_l = dly->lp_l;
     int32_t filt_r = dly->lp_r;
 
-    // 2. Feedback routing (attenuate input by >> 1 so internal buffer has +6dB headroom)
     int32_t in_scaled_l = *in_l >> 1;
     int32_t in_scaled_r = *in_r >> 1;
 
@@ -87,7 +106,7 @@ void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_
         sum_r = in_scaled_r + ((filt_r * dly->feedback) >> 8);
     }
 
-    // 3. DC Blocker (high-pass at ~15Hz) so >100% self-oscillation stays centered around 0
+    // DC Blocker
     int32_t dc_l = sum_l - dly->dc_in_l + ((dly->dc_out_l * 253) >> 8);
     dly->dc_in_l = sum_l;
     dly->dc_out_l = dc_l;
@@ -96,13 +115,11 @@ void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_
     dly->dc_in_r = sum_r;
     dly->dc_out_r = dc_r;
 
-    // 4. Smooth tape saturation
     dly->buf_l[dly->write_idx] = tape_saturate(dc_l);
     dly->buf_r[dly->write_idx] = tape_saturate(dc_r);
     
     dly->write_idx = (dly->write_idx + 1) & (DLY_MAX_SAMPLES - 1);
 
-    // Restore the 2x headroom scaling at output
     *out_l = ((filt_l * 2 * dly->mix) / 100);
     *out_r = ((filt_r * 2 * dly->mix) / 100);
 }
