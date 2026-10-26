@@ -16,10 +16,9 @@ static unsigned current_timeout = 0;
 static int32_t global_level = 0;
 static uint32_t target_dly_samples = 11025;
 
-// Persistent cross-coupling state so self-oscillating repeats inherit the track's reverb wetness
 static int32_t last_rev_out_l = 0;
 static int32_t last_rev_out_r = 0;
-static int32_t dly_to_rev_gain = 192; // Q8 gain (192 = 75% default send into reverb)
+static int32_t dly_to_rev_gain = 192;
 
 uint8_t  custom_rev_type = 0;
 uint8_t  custom_rev_size = 85;
@@ -55,8 +54,15 @@ FM1_DSP_CODE void fm1_fx_clear(void) {
     if (quiet_frames == UINT32_MAX) return;
     memset(global_delay.buf_l, 0, sizeof(global_delay.buf_l));
     memset(global_delay.buf_r, 0, sizeof(global_delay.buf_r));
+    global_delay.lp_l = global_delay.lp_r = 0;
+    global_delay.dc_in_l = global_delay.dc_out_l = 0;
+    global_delay.dc_in_r = global_delay.dc_out_r = 0;
+
     memset(global_reverb.fdn_buf, 0, sizeof(global_reverb.fdn_buf));
     memset(global_reverb.ap_buf, 0, sizeof(global_reverb.ap_buf));
+    memset(global_reverb.fdn_lp, 0, sizeof(global_reverb.fdn_lp));
+    global_reverb.in_lp_l = global_reverb.in_lp_r = 0;
+
     last_rev_out_l = 0;
     last_rev_out_r = 0;
     
@@ -89,16 +95,13 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         if (r_tot > 167 || r_tot < -167 || d_tot > 167 || d_tot < -167) { 
             signal = 1;
         }
-        rev_energy += (uint32_t)((r_tot < 0 ? -r_tot : r_tot) >> 9);
-        dly_energy += (uint32_t)((d_tot < 0 ? -d_tot : d_tot) >> 9);
+        rev_energy += (uint32_t)((r_tot < 0 ? -r_tot : r_tot) >> 10);
+        dly_energy += (uint32_t)((d_tot < 0 ? -d_tot : d_tot) >> 10);
     }
 
-    // When notes are actively sent into the delay, remember their Reverb-to-Delay send ratio!
-    // That way, when notes stop and the delay self-oscillates (>100%), its repeats are sent
-    // into the reverb at the exact same wetness proportion as the original notes.
-    if (dly_energy > 64U) {
+    if (dly_energy > 32U) {
         int32_t target_gain = (int32_t)((rev_energy * 256U) / dly_energy);
-        if (target_gain > 256) target_gain = 256; // Cap at 100% matching send
+        if (target_gain > 256) target_gain = 256;
         dly_to_rev_gain = (dly_to_rev_gain * 7 + target_gain) >> 3;
     }
 
@@ -130,12 +133,12 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
     unsigned wet_active = 0;
 
     for (unsigned i = 0; i < FM1_BLOCK_FRAMES; ++i) {
-        int32_t dly_in = (dly[i] + gran_fx_dly_bus[i]) / 512;
-        int32_t rev_in = (rev[i] + gran_fx_rev_bus[i]) / 512;
+        // Divide by 1024 (>> 10) for extra 6dB of clean input headroom
+        int32_t dly_in = (dly[i] + gran_fx_dly_bus[i]) >> 10;
+        int32_t rev_in = (rev[i] + gran_fx_rev_bus[i]) >> 10;
 
-        // Subtle cross-feed from the reverb tank back into the delay input (softens self-oscillation)
-        int32_t rev_wash_l = (last_rev_out_l * dly_to_rev_gain) >> 12;
-        int32_t rev_wash_r = (last_rev_out_r * dly_to_rev_gain) >> 12;
+        int32_t rev_wash_l = (last_rev_out_l * dly_to_rev_gain) >> 13;
+        int32_t rev_wash_r = (last_rev_out_r * dly_to_rev_gain) >> 13;
 
         int32_t dly_in_l = dly_in + rev_wash_l;
         int32_t dly_in_r = dly_in + rev_wash_r;
@@ -143,7 +146,6 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         int32_t dly_out_r = 0;
         fx_delay_process(&global_delay, &dly_in_l, &dly_in_r, &dly_out_l, &dly_out_r);
 
-        // Send the delay repeats into the stereo reverb at the remembered track wetness ratio!
         int32_t rev_in_l = rev_in + ((dly_out_l * dly_to_rev_gain) >> 8);
         int32_t rev_in_r = rev_in + ((dly_out_r * dly_to_rev_gain) >> 8);
         int32_t rev_out_l = 0;
@@ -153,13 +155,14 @@ FM1_DSP_CODE void fm1_fx_render(int32_t *left_mix, int32_t *right_mix, int32_t *
         last_rev_out_l = rev_out_l;
         last_rev_out_r = rev_out_r;
 
-        if (dly_out_l > 2 || dly_out_l < -2 || dly_out_r > 2 || dly_out_r < -2 ||
-            rev_out_l > 2 || rev_out_l < -2 || rev_out_r > 2 || rev_out_r < -2) {
+        if (dly_out_l > 1 || dly_out_l < -1 || dly_out_r > 1 || dly_out_r < -1 ||
+            rev_out_l > 1 || rev_out_l < -1 || rev_out_r > 1 || rev_out_r < -1) {
             wet_active = 1;
         }
 
-        int32_t out_l = (dly_out_l + rev_out_l) * 512;
-        int32_t out_r = (dly_out_r + rev_out_r) * 512;
+        // Restore 1024x scaling to match the 24-bit master bus
+        int32_t out_l = (dly_out_l + rev_out_l) << 10;
+        int32_t out_r = (dly_out_r + rev_out_r) << 10;
         
         out_l = fm_mul30(out_l, global_level);
         out_r = fm_mul30(out_r, global_level);
