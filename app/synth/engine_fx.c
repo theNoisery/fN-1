@@ -108,19 +108,19 @@ void fx_delay_process(TapeDelayEngine *dly, int32_t *in_l, int32_t *in_r, int32_
 }
 
 // ---------------------------------------------------------
-// MULTI-ALGO FDN REVERB (WITH DAMPING & HEADROOM)
+// MULTI-ALGO FDN REVERB (HIGH-DENSITY DIFFUSION & CLEAN)
 // ---------------------------------------------------------
 
 static const uint16_t rev_primes[3][FDN_LINES] = {
-    { 1423, 1789, 2131, 2459 }, // HALL
-    { 401,  503,  613,  727  }, // PLATE
-    { 787,  883,  1013, 1153 }  // CHAMBER
+    { 1423, 1789, 2131, 2459 }, // HALL: Wide, expansive prime lengths
+    { 503,  613,  727,  853  }, // PLATE: Tight, dense build-up
+    { 787,  941,  1103, 1277 }  // CHAMBER: Medium acoustic room
 };
 
 static const uint16_t ap_primes[3][FDN_LINES] = {
-    { 223, 263, 311, 359 }, // HALL
-    { 347, 443, 541, 659 }, // PLATE
-    { 151, 191, 239, 281 }  // CHAMBER
+    { 149, 223, 311, 439 }, // HALL
+    { 193, 283, 397, 541 }, // PLATE
+    { 113, 173, 251, 347 }  // CHAMBER
 };
 
 void fx_reverb_init(ReverbEngine *rev) {
@@ -142,73 +142,73 @@ void fx_reverb_set(ReverbEngine *rev, uint8_t type, uint8_t size, uint8_t decay,
         rev->fdn_lengths[i] = (rev_primes[type][i] * scale) / 100;
         if (rev->fdn_lengths[i] >= FDN_MAX_LEN) rev->fdn_lengths[i] = FDN_MAX_LEN - 1;
 
-        rev->ap_lengths[i] = ap_primes[type][i];
+        rev->ap_lengths[i] = (ap_primes[type][i] * (75 + (size >> 1))) / 100;
+        if (rev->ap_lengths[i] >= AP_MAX_LEN) rev->ap_lengths[i] = AP_MAX_LEN - 1;
+        if (rev->ap_lengths[i] < 32) rev->ap_lengths[i] = 32;
     }
 }
 
 void fx_reverb_process(ReverbEngine *rev, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r) {
-    // 1. Scale input down by 4x (>> 2) to give the Allpass & FDN tank 12dB of clean headroom,
-    // and gently pre-smooth harsh input transients.
-    rev->in_lp_l += (((*in_l >> 2) - rev->in_lp_l) * 180) >> 8;
-    rev->in_lp_r += (((*in_r >> 2) - rev->in_lp_r) * 180) >> 8;
+    // 1. Gently smooth harsh input transients without throwing away bit-depth
+    rev->in_lp_l += ((*in_l - rev->in_lp_l) * 160) >> 8;
+    rev->in_lp_r += ((*in_r - rev->in_lp_r) * 160) >> 8;
 
-    int32_t ap_coeff = (rev->type == REV_TYPE_PLATE) ? 18432 : 14745; // 0.56 vs 0.45 in Q15
-    
-    int32_t diff_l = rev->in_lp_l;
-    for (int i = 0; i < 2; i++) {
-        int16_t ap_read = rev->ap_buf[i][rev->ap_idx[i]];
-        int32_t ap_out = ap_read - ((diff_l * ap_coeff) >> 15);
-        rev->ap_buf[i][rev->ap_idx[i]] = clean_clamp16(diff_l + ((ap_out * ap_coeff) >> 15));
-        diff_l = ap_out;
-        if (++rev->ap_idx[i] >= rev->ap_lengths[i]) rev->ap_idx[i] = 0;
+    int32_t mono_in = (rev->in_lp_l + rev->in_lp_r) >> 1;
+    int32_t stereo_diff = (rev->in_lp_l - rev->in_lp_r) >> 2;
+
+    // 2. 4-Stage Cascaded Series Allpass Diffuser (2^4 = 16x transient smearing)
+    // High allpass gain (0.65 for Plate, 0.60 for Hall/Chamber) turns sharp clicks into a soft cloud
+    int32_t ap_coeff = (rev->type == REV_TYPE_PLATE) ? 21299 : 19660;
+    int32_t diffused = mono_in >> 1; // -6dB headroom for the series chain
+
+    for (int i = 0; i < FDN_LINES; i++) {
+        uint32_t idx = rev->ap_idx[i];
+        if (idx >= rev->ap_lengths[i]) idx = 0;
+
+        int32_t delayed = rev->ap_buf[i][idx];
+        int32_t v = diffused - ((delayed * ap_coeff) >> 15);
+        rev->ap_buf[i][idx] = tape_saturate(v);
+        diffused = delayed + ((v * ap_coeff) >> 15);
+
+        if (++idx >= rev->ap_lengths[i]) idx = 0;
+        rev->ap_idx[i] = idx;
     }
 
-    int32_t diff_r = rev->in_lp_r;
-    for (int i = 2; i < 4; i++) {
-        int16_t ap_read = rev->ap_buf[i][rev->ap_idx[i]];
-        int32_t ap_out = ap_read - ((diff_r * ap_coeff) >> 15);
-        rev->ap_buf[i][rev->ap_idx[i]] = clean_clamp16(diff_r + ((ap_out * ap_coeff) >> 15));
-        diff_r = ap_out;
-        if (++rev->ap_idx[i] >= rev->ap_lengths[i]) rev->ap_idx[i] = 0;
-    }
+    // Multi-tap Early Reflections from across the FDN delay lines
+    int32_t er_l = rev->fdn_buf[0][(rev->fdn_idx[0] + (rev->fdn_lengths[0] >> 2)) % rev->fdn_lengths[0]]
+                 + rev->fdn_buf[2][(rev->fdn_idx[2] + (rev->fdn_lengths[2] >> 1)) % rev->fdn_lengths[2]];
+    int32_t er_r = rev->fdn_buf[1][(rev->fdn_idx[1] + (rev->fdn_lengths[1] >> 2)) % rev->fdn_lengths[1]]
+                 + rev->fdn_buf[3][(rev->fdn_idx[3] + (rev->fdn_lengths[3] >> 1)) % rev->fdn_lengths[3]];
 
-    int32_t er_tap_l = rev->fdn_buf[0][(rev->fdn_idx[0] + FDN_MAX_LEN - (rev->fdn_lengths[0] / 3)) & (FDN_MAX_LEN - 1)];
-    int32_t er_tap_r = rev->fdn_buf[1][(rev->fdn_idx[1] + FDN_MAX_LEN - (rev->fdn_lengths[1] / 3)) & (FDN_MAX_LEN - 1)];
-
-    // 2. Read FDN lines and apply warm acoustic high-frequency damping per line
-    // Hall damps more warmly (128/256), Plate stays brighter (190/256), Chamber is medium (160/256)
-    int32_t damp = (rev->type == REV_TYPE_HALL) ? 128 : (rev->type == REV_TYPE_CHAMBER) ? 160 : 190;
+    // 3. Read FDN lines and apply warm acoustic HF damping per line
+    int32_t damp = (rev->type == REV_TYPE_HALL) ? 110 : (rev->type == REV_TYPE_CHAMBER) ? 145 : 180;
     int32_t fdn_out[FDN_LINES];
     for (int i = 0; i < FDN_LINES; i++) {
+        if (rev->fdn_idx[i] >= rev->fdn_lengths[i]) rev->fdn_idx[i] = 0;
         int32_t raw = rev->fdn_buf[i][rev->fdn_idx[i]];
         rev->fdn_lp[i] += ((raw - rev->fdn_lp[i]) * damp) >> 8;
         fdn_out[i] = rev->fdn_lp[i];
     }
 
-    // 3. Orthogonal Householder feedback matrix with slow LFO chorus modulation on line 0 & 1
-    rev->lfo_phase += 1U;
-    uint32_t mod = (rev->lfo_phase >> 9) & 1U; // Subtle 1-sample interpolation shimmer
-
-    int32_t fb_gain = 14000 + (rev->decay * 17200) / 100; // Smooth decay curve up to ~0.95
-    int32_t in_matrix[FDN_LINES];
-
-    in_matrix[0] =  fdn_out[0] + fdn_out[1] + fdn_out[2] + fdn_out[3];
-    in_matrix[1] =  fdn_out[0] - fdn_out[1] + fdn_out[2] - fdn_out[3];
-    in_matrix[2] =  fdn_out[0] + fdn_out[1] - fdn_out[2] - fdn_out[3];
-    in_matrix[3] =  fdn_out[0] - fdn_out[1] - fdn_out[2] + fdn_out[3];
+    // 4. Orthogonal Householder Matrix (0.5x scaling = >> 1)
+    int32_t sum_all = (fdn_out[0] + fdn_out[1] + fdn_out[2] + fdn_out[3]) >> 1;
+    int32_t fb_gain = 16384 + (rev->decay * 15500) / 100; // 0.50 to 0.973 decay
 
     for (int i = 0; i < FDN_LINES; i++) {
-        int32_t fb_signal = (in_matrix[i] * fb_gain) >> 16;
-        int32_t tank_in = (i & 1) ? diff_r : diff_l;
-        rev->fdn_buf[i][rev->fdn_idx[i]] = clean_clamp16(tank_in + fb_signal);
-        
-        uint16_t len = rev->fdn_lengths[i] - ((i == 0) ? (uint16_t)mod : 0U);
-        if (++rev->fdn_idx[i] >= len) rev->fdn_idx[i] = 0;
+        int32_t matrix_out = sum_all - fdn_out[i];
+        int32_t fb_signal = (matrix_out * fb_gain) >> 15;
+
+        // Inject diffused signal + stereo spread with alternating phase so DC never builds up
+        int32_t spread = (i & 1) ? -stereo_diff : stereo_diff;
+        int32_t tank_in = ((i & 2) ? -diffused : diffused) + spread;
+
+        rev->fdn_buf[i][rev->fdn_idx[i]] = tape_saturate(tank_in + fb_signal);
+        if (++rev->fdn_idx[i] >= rev->fdn_lengths[i]) rev->fdn_idx[i] = 0;
     }
 
-    // 4. Stereo extraction & gain restoration (<< 1 restores the clean headroom)
-    int32_t wet_l = ((fdn_out[0] - fdn_out[2]) << 1) + ((er_tap_l * rev->er_level) >> 5);
-    int32_t wet_r = ((fdn_out[1] + fdn_out[3]) << 1) + ((er_tap_r * rev->er_level) >> 5);
+    // 5. Decorrelated Stereo Extraction
+    int32_t wet_l = (fdn_out[0] - fdn_out[1] + fdn_out[2] - fdn_out[3]) + ((er_l * rev->er_level) >> 7);
+    int32_t wet_r = (fdn_out[0] + fdn_out[1] - fdn_out[2] - fdn_out[3]) + ((er_r * rev->er_level) >> 7);
 
     *out_l = ((wet_l * rev->mix) / 100);
     *out_r = ((wet_r * rev->mix) / 100);
