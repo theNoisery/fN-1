@@ -10,8 +10,10 @@
 
 #include "sample_metadata.inc"
 
-/* Declare sample decoding quantization table provided by SDK/firmware context */
-extern const int16_t sample_dqt[];
+/* Define the sample decoding quantization table */
+const int16_t sample_dqt[16] = {
+    0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32767
+};
 
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
@@ -20,7 +22,7 @@ static const uint8_t *global_samples[16] = {NULL};
 static uint32_t global_lengths[16] = {0};
 static uint8_t active_sample_slot = 0;
 
-#define MAX_RAM_FRAMES 131072
+#define MAX_RAM_FRAMES 16384
 static int16_t decoded_ram_buffer[MAX_RAM_FRAMES];
 static uint32_t decoded_length = 0;
 
@@ -100,30 +102,26 @@ void granular_init(void *state_ptr, uint32_t sample_rate) {
     memset(state, 0, sizeof(GranularVoiceState));
     state->sample_rate = sample_rate;
 
-    // Page 1 Calibrated defaults
-    state->macro_scan = 1;       // 1%
-    state->macro_size = 200;     // 200 ms
-    state->macro_density = 12;   // 12 grains
-    state->macro_spray = 10;     // 10% spray
+    state->macro_scan = 1;
+    state->macro_size = 200;
+    state->macro_density = 12;
+    state->macro_spray = 10;
 
-    // Page 2 Space / Pitch / Polyphony defaults
-    state->macro_stereo = 50;    // 50% stereo L/R interval offset & spread
-    state->macro_pitch_rnd = 0;  // 0% pitch randomization (locked pitch by default)
-    state->poly_voices = 4;      // 4-voice polyphony by default
-    state->chorus_depth = 30;    // 30% stereo chorus
+    state->macro_stereo = 50;
+    state->macro_pitch_rnd = 0;
+    state->poly_voices = 4;
+    state->chorus_depth = 30;
 
-    // Default Master ADSR in ms (0-2000ms) and dB (-60 to 0dB)
-    state->env_attack = 150;     // 150 ms
-    state->env_decay = 300;      // 300 ms
-    state->env_sustain = 0;      // 0 dB (full sustain)
-    state->env_release = 600;    // 600 ms
+    state->env_attack = 150;
+    state->env_decay = 300;
+    state->env_sustain = 0;
+    state->env_release = 600;
 
-    // Page 3 Default Filter & Slope
     state->filter_mode = GRAN_FILT_LPF;
     state->filter_cutoff = 120;
     state->filter_res = 15;
-    state->filter_slope = 0;     // 0 = 12dB/oct
-    state->volume = 100;         // Default track level 100
+    state->filter_slope = 0;
+    state->volume = 100;
 
     state->rng_state = 0x12345678;
 
@@ -490,7 +488,7 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
         int32_t mixed_l = sum_l / norm_div;
         int32_t mixed_r = sum_r / norm_div;
 
-        // 1. Cascaded Multimode State Variable Filter (12dB / 24dB / 36dB slope)
+        // 1. Cascaded Multimode State Variable Filter
         if (state->filter_mode != GRAN_FILT_OFF) {
             for (uint8_t s = 0; s <= filter_stages; s++) {
                 int32_t in_l = soft_clip(mixed_l);
@@ -536,7 +534,6 @@ void granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size
             chorus_write_idx = (chorus_write_idx + 1U) & (CHORUS_BUF_LEN - 1U);
         }
 
-        // Output pure dry stereo audio (Reverb & Delay are handled globally by effects.c!)
         out_l[f] = soft_clip(mixed_l);
         out_r[f] = soft_clip(mixed_r);
     }
