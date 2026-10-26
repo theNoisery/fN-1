@@ -2,16 +2,16 @@
 #include "synth/engine_fx.h"
 #include <string.h>
 
-// Global UI parameters expected by app/screen.c
-extern int32_t custom_dly_lr_diff;
-extern int32_t custom_rev_type;
-extern int32_t custom_rev_decay;
-extern int32_t custom_rev_size;
-extern int32_t custom_rev_er;
-extern int32_t custom_dly_fb_pct;
-extern int32_t custom_dly_time;
-extern int32_t custom_rev_mix;
-extern int32_t custom_dly_mix;
+// Define these globally for the hardware firmware build
+int32_t custom_dly_lr_diff = 0;
+int32_t custom_rev_type = 0;
+int32_t custom_rev_decay = 50;
+int32_t custom_rev_size = 50;
+int32_t custom_rev_er = 30;
+int32_t custom_dly_fb_pct = 50;
+int32_t custom_dly_time = 250;
+int32_t custom_rev_mix = 30;
+int32_t custom_dly_mix = 30;
 
 // ---------------------------------------------------------
 // CORE DSP UTILITIES
