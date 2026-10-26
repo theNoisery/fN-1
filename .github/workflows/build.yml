@@ -54,7 +54,10 @@ jobs:
           # Replace 'powershell' with 'pwsh' inside build.bat so it uses PowerShell 7 natively
           (Get-Content .\build.bat) -replace 'powershell(?:\.exe)?', 'pwsh' | Set-Content .\build.bat
 
-          # Run build.bat --web first, then --package as stated in README.md
+          # Generate asset include files (sample_metadata.inc, etc.) first
+          pwsh -File .\tools\Build-Web.ps1 -LocalPreview
+
+          # Run build.bat to package the hardware firmware
           cmd.exe /c "build.bat --web"
           cmd.exe /c "build.bat --package"
 
