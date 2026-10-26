@@ -18,18 +18,15 @@ jobs:
           curl.exe -L --retry 3 "https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe" -o jl_installer.exe
 
           Write-Host "Extracting installer archive..."
-          # Install innoextract via chocolatey in case 2.5.3.exe is an Inno Setup installer
           choco install innoextract -y --no-progress | Out-Null
 
           New-Item -ItemType Directory -Force -Path "C:\JL_temp" | Out-Null
           
-          # Try 7z first
+          # Extract with 7z and innoextract
           7z x jl_installer.exe -o"C:\JL_temp\7z" -y | Out-Null
-          
-          # Try innoextract
           & innoextract -d "C:\JL_temp\inno" jl_installer.exe | Out-Null
 
-          # Search for clang.exe in either extraction
+          # Search for clang.exe in extraction
           $foundClang = Get-ChildItem -Path "C:\JL_temp" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
           if ($foundClang) {
@@ -38,7 +35,6 @@ jobs:
             New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
             Copy-Item -Path $pi32Folder -Destination "C:\JL\pi32" -Recurse -Force
           } else {
-            Get-ChildItem -Path "C:\JL_temp" -Recurse | Select-Object -First 30 FullName
             throw "Could not locate clang.exe in extracted archive files."
           }
 
@@ -55,7 +51,12 @@ jobs:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
           FM1_SOURCE_URL: "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip"
         run: |
-          .\build.bat --package
+          # Alias powershell to modern pwsh so build.bat doesn't call legacy Windows PowerShell
+          $pwshPath = (Get-Command pwsh).Source
+          Set-Alias -Name powershell -Value $pwshPath -Scope Global -Force
+
+          # Run build.bat through cmd while passing the environment variables
+          cmd.exe /c "build.bat --package"
 
       - name: Upload Flashable Firmware
         uses: actions/upload-artifact@v4
