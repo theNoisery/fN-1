@@ -116,21 +116,30 @@ void fx_reverb_set(ReverbEngine *rev, uint8_t type, uint8_t size, uint8_t decay,
 }
 
 void fx_reverb_process(ReverbEngine *rev, int32_t *in_l, int32_t *in_r, int32_t *out_l, int32_t *out_r) {
-    int32_t input = (*in_l + *in_r) >> 1;
-    
     int32_t ap_coeff = (rev->type == REV_TYPE_PLATE) ? 20480 : 16384; 
     
-    int32_t diffused = input;
-    for (int i = 0; i < FDN_LINES; i++) {
+    // Diffuse Left through Allpass 0 & 1, and Right through Allpass 2 & 3
+    // This keeps stereo ping-pong delay repeats wide inside the reverb tank!
+    int32_t diff_l = *in_l;
+    for (int i = 0; i < 2; i++) {
         int16_t ap_read = rev->ap_buf[i][rev->ap_idx[i]];
-        int32_t ap_out = ap_read - ((diffused * ap_coeff) >> 15);
-        rev->ap_buf[i][rev->ap_idx[i]] = tape_saturate(diffused + ((ap_out * ap_coeff) >> 15));
-        
-        diffused = ap_out;
+        int32_t ap_out = ap_read - ((diff_l * ap_coeff) >> 15);
+        rev->ap_buf[i][rev->ap_idx[i]] = tape_saturate(diff_l + ((ap_out * ap_coeff) >> 15));
+        diff_l = ap_out;
         if (++rev->ap_idx[i] >= rev->ap_lengths[i]) rev->ap_idx[i] = 0;
     }
 
-    int32_t er_tap = rev->fdn_buf[0][(rev->fdn_idx[0] + FDN_MAX_LEN - (rev->fdn_lengths[0] / 3)) & (FDN_MAX_LEN - 1)];
+    int32_t diff_r = *in_r;
+    for (int i = 2; i < 4; i++) {
+        int16_t ap_read = rev->ap_buf[i][rev->ap_idx[i]];
+        int32_t ap_out = ap_read - ((diff_r * ap_coeff) >> 15);
+        rev->ap_buf[i][rev->ap_idx[i]] = tape_saturate(diff_r + ((ap_out * ap_coeff) >> 15));
+        diff_r = ap_out;
+        if (++rev->ap_idx[i] >= rev->ap_lengths[i]) rev->ap_idx[i] = 0;
+    }
+
+    int32_t er_tap_l = rev->fdn_buf[0][(rev->fdn_idx[0] + FDN_MAX_LEN - (rev->fdn_lengths[0] / 3)) & (FDN_MAX_LEN - 1)];
+    int32_t er_tap_r = rev->fdn_buf[1][(rev->fdn_idx[1] + FDN_MAX_LEN - (rev->fdn_lengths[1] / 3)) & (FDN_MAX_LEN - 1)];
 
     int32_t fdn_out[FDN_LINES];
     for (int i = 0; i < FDN_LINES; i++) {
@@ -146,13 +155,14 @@ void fx_reverb_process(ReverbEngine *rev, int32_t *in_l, int32_t *in_r, int32_t 
     in_matrix[3] =  fdn_out[0] - fdn_out[1] - fdn_out[2] + fdn_out[3];
 
     for (int i = 0; i < FDN_LINES; i++) {
-        int32_t fb_signal = (in_matrix[i] * fb_gain) >> 16; 
-        rev->fdn_buf[i][rev->fdn_idx[i]] = tape_saturate(diffused + fb_signal);
+        int32_t fb_signal = (in_matrix[i] * fb_gain) >> 16;
+        int32_t tank_in = (i & 1) ? diff_r : diff_l;
+        rev->fdn_buf[i][rev->fdn_idx[i]] = tape_saturate(tank_in + fb_signal);
         if (++rev->fdn_idx[i] >= rev->fdn_lengths[i]) rev->fdn_idx[i] = 0;
     }
 
-    int32_t wet_l = fdn_out[0] - fdn_out[2] + ((er_tap * rev->er_level) >> 7);
-    int32_t wet_r = fdn_out[1] + fdn_out[3] + ((er_tap * rev->er_level) >> 7);
+    int32_t wet_l = fdn_out[0] - fdn_out[2] + ((er_tap_l * rev->er_level) >> 7);
+    int32_t wet_r = fdn_out[1] + fdn_out[3] + ((er_tap_r * rev->er_level) >> 7);
 
     // Return WET ONLY for the master send bus
     *out_l = ((wet_l * rev->mix) / 100);
