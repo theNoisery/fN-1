@@ -6,15 +6,42 @@
 #include "synth/engine_granular.h"
 #include <string.h>
 
+#ifdef FM1_OPEN_WEB
 extern uint8_t  custom_rev_type;
 extern uint8_t  custom_rev_size;
 extern uint8_t  custom_rev_decay;
 extern uint8_t  custom_rev_er;
 extern uint16_t custom_dly_fb_pct;
 extern int8_t   custom_dly_lr_diff;
+#endif
 
 
 extern GranularVoiceState granular_state;
+#include "granular_bridge.h"
+/* The sealed SDK has no granular source type. The UI shows a PLUCK track that
+ * the bridge has claimed as GRANULAR, and never hands GROOVE_GRANULAR to the
+ * SDK. Everything below this block sees the virtual type. */
+static unsigned ui_source_type(unsigned t)
+{
+    return granular_bridge_virtual(t) ? (unsigned)GROOVE_GRANULAR : groove_source_type(t);
+}
+static void ui_get_view(unsigned t, unsigned step, struct groove_view *v)
+{
+    groove_get_view(t, step, v);
+    if (granular_bridge_virtual(t)) {
+        v->type = GROOVE_GRANULAR;
+        v->volume = granular_state.volume;
+    }
+}
+static int ui_source_set(unsigned t, unsigned type)
+{
+    if (type >= UI_SOURCES) return -1;
+    if (type == GROOVE_GRANULAR) return granular_bridge_virtual(t) ? 0 : granular_bridge_assign(t);
+    granular_bridge_release(t);
+    return groove_source_set(t, type);
+}
+#define groove_source_type ui_source_type
+#define groove_get_view ui_get_view
 enum {
     BACK = 0x0000,
     PANEL = 0x18e3,
@@ -1269,6 +1296,7 @@ static __attribute__((noinline)) void name_draw(void)
     text(8, 76, name, 2, ACCENT, BACK);
     paint_fill(8 + name_cursor * 12, 93, 10, 2, ACCENT);
 }
+#ifdef FM1_OPEN_WEB
 static __attribute__((noinline)) void effects_draw(void)
 {
     const uint8_t *values = frame_effects;
@@ -1353,6 +1381,54 @@ static __attribute__((noinline)) void effects_draw(void)
         knob(i, label, display, colors[i]);
     }
 }
+#else
+static __attribute__((noinline)) void effects_draw(void)
+{
+    const uint8_t *values = frame_effects;
+    unsigned title = 1U + track + effects_page * 8U;
+    if (cache->title_cache != title) {
+        cache->title_cache = title;
+        paint_fill(8, 40, 224, 36, BACK);
+        if (effects_page) text(8, 40, effects_page == 2 ? "DELAY / SEQ TAP" : "SHARED FX / ALL TRACKS", 1, TEXT, BACK);
+        else {
+            text(8, 40, "TRACK", 1, TEXT, BACK);
+            number(44, 40, track + 1U, 1, 1, ACCENT, BACK);
+            text(60, 40, source_names[frame_views[track].type], 1, TEXT, BACK);
+        }
+        text(8, 64, "PRESETS: TRACK / SHARED / DELAY", 1, DIM, BACK);
+    }
+    static const char *const shared[4] = {"REV TIME", "DLY TIME", "FEEDBACK", "RETURN"};
+    static const char *const local[4] = {"REV SEND", "DLY SEND", "TRK VOL", "ALL RET"};
+    static const char *const delay[4] = {"SYNC", "TIME MS", "BPM", "FEEDBACK"};
+    static const char *const division[] = {"1/32T", "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/8D", "1/4"};
+    const char *const *labels = effects_page == 2 ? delay : effects_page ? shared : local;
+    for (unsigned i = 0; i < 4; ++i) {
+        unsigned value = effects_page == 2 && !i ? values[1] : values[i], synced = groove_delay_synced(values[1]);
+        const char *label = labels[i];
+        char display[12];
+        if (effects_page == 2 && !i) strcpy(display, synced ? "ON" : "OFF");
+        else if (effects_page && i == 1 && synced) {
+            label = "DIVISION"; strcpy(display, division[values[1] - GROOVE_DELAY_SYNC]);
+        } else if (effects_page == 2 && i == 2 && frame_views[track].clock_mode) {
+            strcpy(display, "MIDI");
+        } else {
+            if (effects_page && i == 1) value = (groove_delay_ticks() * 80U + 220U) / 441U;
+            else if (effects_page == 2) value = i == 2 ? frame_views[track].tempo : values[2];
+            decimal(display, (int)value, 1);
+        }
+        /* Knob cache covers labels as well as values when FREE/SYNC changes. */
+        if (cache->row_cache[i] != (value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17))) {
+            cache->row_cache[i] = (value | (synced << 16) | ((unsigned)frame_views[track].clock_mode << 17));
+            paint_fill(8, 88 + i * 22, 224, 18, BACK);
+            text(8, 91 + i * 22, label, 1, TEXT, BACK);
+            text(164, 91 + i * 22, display, 1, ACCENT, BACK);
+            if (effects_page && i == 1 && !synced) text(190, 91 + i * 22, "MS", 1, DIM, BACK);
+            if (!effects_page && i < 2) text(190, 91 + i * 22, "%", 1, DIM, BACK);
+        }
+        knob(i, label, display, colors[i]);
+    }
+}
+#endif
 static void leds(const struct groove_view *v, unsigned visible)
 {
     uint32_t bits = 0;
@@ -1915,6 +1991,7 @@ static int release_keys_except(uint32_t keep)
         if (key_note[key] != 0xff && !(keep & (1U << key))) {
             if (!post((uint8_t)(0x80 + groove_midi_input_channel(key_track[key])), key_note[key], 0, 3))
                 return 0;
+            if (granular_bridge_virtual(key_track[key])) granular_bridge_note_off(key_note[key]);
             key_note[key] = 0xff;
             project_keys &= ~(1U << key);
         }
@@ -1937,6 +2014,7 @@ static int preset_load(unsigned start, uint32_t now)
      * retired Normal voices; retain its original pitch until key release. */
     if (!release_keys_except(keep)) return -1;
     project_keys = keep;
+    granular_bridge_forget(); /* the loaded project owns every source now */
     blocked_keys |= previous_keys & ~keep;
     preset_loaded = 1;
     preset_project_revision = groove_project_revision();
@@ -1973,6 +2051,7 @@ static void toggle_step(unsigned step)
 }
 void groove_screen_init(void)
 {
+    granular_bridge_init();
     track = cursor = drum = writing = page = fm_group = op = 0;
     music_page = subpage_return = project_return = rec_before_press = OVERVIEW;
     rec_down = rec_used = 0;
@@ -2146,7 +2225,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
     if ((controls->buttons & BUTTON(HOME)) && controls->encoders[6] &&
         !(controls->buttons & BUTTON(PLAY))) {
         source_preview = (unsigned)((int)groove_source_type(track) +
-            controls->encoders[6] % GROOVE_SOURCES + GROOVE_SOURCES) % GROOVE_SOURCES;
+            controls->encoders[6] % (int)UI_SOURCES + (int)UI_SOURCES) % (int)UI_SOURCES;
         page = SOURCE; source_result = 0;
         goto controls_done;
     }
@@ -2300,9 +2379,9 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
     }
     if (page == SOURCE) {
         int delta = controls->encoders[0] + controls->encoders[1] + controls->encoders[3] + controls->encoders[6];
-        source_preview = (unsigned)((int)source_preview + delta % GROOVE_SOURCES + GROOVE_SOURCES) % GROOVE_SOURCES;
+        source_preview = (unsigned)((int)source_preview + delta % (int)UI_SOURCES + (int)UI_SOURCES) % (int)UI_SOURCES;
         if (pressed & BUTTON(SAVE)) {
-            source_result = groove_source_set(track, source_preview);
+            source_result = ui_source_set(track, source_preview);
             if (!source_result) {
                 memset(tone_pages[track], 0, sizeof tone_pages[track]);
                 drum_parts[track] = drum = 0;
@@ -2466,8 +2545,8 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     if (!release_keys())
                         return 0;
                     int type = (int)groove_source_type(track);
-                    type = (type + (controls->encoders[1] + controls->encoders[3]) % GROOVE_SOURCES + GROOVE_SOURCES) %
-                           GROOVE_SOURCES;
+                    type = (type + (controls->encoders[1] + controls->encoders[3]) % (int)UI_SOURCES + (int)UI_SOURCES) %
+                           (int)UI_SOURCES;
                     source_preview = (unsigned)type;
                     source_result = 0;
                     page = SOURCE;
@@ -2533,6 +2612,7 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                     static const uint8_t parameters[] = {134, 135, 144};
                     for (unsigned i = 0; i < 3; ++i) groove_fm_edit(track, parameters[i], controls->encoders[2 + i]);
                     edit_track_volume(track, controls->encoders[5]);
+#ifdef FM1_OPEN_WEB
                 } else if (page == EFFECTS) {
                     unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 2);
                     if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
@@ -2553,6 +2633,25 @@ static int apply_controls(const struct fm1_controls *controls, uint32_t now,
                         edit_track_volume(track, controls->encoders[4]);
                         groove_effects_edit(3, controls->encoders[5]);
                     }
+#else
+                } else if (page == EFFECTS) {
+                    unsigned next = (unsigned)clamp((int)effects_page + controls->encoders[6], 0, 2);
+                    if (next != effects_page) { effects_page = next; cache->shown_page = ~0U; }
+                    if (effects_page == 2) {
+                        groove_effects_edit(4, controls->encoders[2]);
+                        groove_effects_edit(1, controls->encoders[3]);
+                        groove_tempo_edit(controls->encoders[4]);
+                        groove_effects_edit(2, controls->encoders[5]);
+                    } else if (effects_page) {
+                        for (unsigned i = 0; i < 4; ++i)
+                            groove_effects_edit(i, controls->encoders[2 + i]);
+                    } else {
+                        for (unsigned i = 0; i < 2; ++i)
+                            groove_sends_edit(track, i, controls->encoders[2 + i]);
+                        groove_control_edit(track, 0, controls->encoders[4], 0);
+                        groove_effects_edit(3, controls->encoders[5]);
+                    }
+#endif
                 } else if (page == FM_LFO && groove_source_type(track) != GROOVE_DX7) {
                     for (unsigned i = 0; i < 4; ++i)
                         groove_lfo_edit(track, i, i < 2 ? fm_encoder_delta(2 + i, controls->encoders[2 + i]) : controls->encoders[2 + i]);
@@ -2804,12 +2903,14 @@ controls_done:
              (key_note[key] != note && !(project_keys & (1U << key))) || key_track[key] != track)) {
             if (!post((uint8_t)(0x80 + groove_midi_input_channel(key_track[key])), key_note[key], 0, 3))
                 return 0;
+            if (granular_bridge_virtual(key_track[key])) granular_bridge_note_off(key_note[key]);
             key_note[key] = 0xff;
             project_keys &= ~(1U << key);
         }
         if (!mode && note < 128 && (keys & (1U << key)) && key_note[key] == 0xff) {
             if (!post((uint8_t)(0x90 + groove_midi_input_channel(track)), (uint8_t)note, 100, 3))
                 return 0;
+            if (granular_bridge_virtual(track)) granular_bridge_note_on(note, 100);
             key_note[key] = (uint8_t)note;
             key_track[key] = (uint8_t)track;
             selected_note = note;
@@ -2825,6 +2926,7 @@ void groove_screen_control(void)
 {
     struct fm1_controls controls;
     fm1_controls_read(&controls);
+    granular_bridge_control();
     uint32_t now = fm1_millis(), key_down = controls.keys & ~previous_keys;
     unsigned master_changed = groove_master_update(controls.knob);
     if (master_changed && (!notice || notice == master_notice || (int32_t)(now - notice_until) >= 0)) {

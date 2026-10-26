@@ -7,6 +7,19 @@
 
 #define MAX_GRAINS 48
 #define GRAN_MAX_VOICES 6
+/* Sample banks hold SAMPLE_DRUM_PADS (8) slots; the other eight entries of the
+ * 16-entry bank header must stay empty. */
+#define GRAN_SLOTS 8U
+
+/* Keeps the optimizer from rewriting a zeroing loop into a memset() call. In
+ * audio code memset/memcpy are Flash calls (see sdk/include/fm1.h). */
+#define GRAN_NO_IDIOM() __asm__ volatile("" ::: "memory")
+
+/* The board renders at 44.1 kHz (sdk/synth.json) but sample banks are stored
+ * at 32 kHz. Grain and envelope times are counted in output frames; grain
+ * read speeds are scaled by GRANULAR_SRC_RATE / GRANULAR_OUT_RATE. */
+#define GRANULAR_OUT_RATE 44100U
+#define GRANULAR_SRC_RATE 32000U
 
 enum {
     GRAN_ENV_IDLE = 0,
@@ -23,11 +36,15 @@ enum {
     GRAN_FILT_HPF
 };
 
+#define GRAN_CHORUS_LEN 1024U /* power of two */
+
 typedef struct {
     uint32_t position;
     uint32_t speed;
     uint32_t length;
     uint32_t counter;
+    uint32_t win_pos; /* Q16 index into the 1024-entry window */
+    uint32_t win_inc; /* Q16 window step per output frame */
     uint16_t start_delay;
     uint8_t pan;
     uint8_t voice_idx;
@@ -48,8 +65,7 @@ typedef struct {
 
 typedef struct {
     uint32_t sample_rate;
-    const int16_t *sample_buffer;
-    uint32_t sample_length;
+    uint32_t frames_per_ms;
 
     // Page 1 Macros: Scan (1-100%), Size (10-500ms), Density (1-24), Spray (0-100%)
     uint16_t macro_scan;
@@ -82,20 +98,36 @@ typedef struct {
 
     uint32_t voice_age_counter;
     uint32_t rng_state;
+
+    // Stereo chorus delay lines (per instance, not shared)
+    uint32_t chorus_idx;
+    uint32_t chorus_phase;
+    int16_t  chorus_l[GRAN_CHORUS_LEN];
+    int16_t  chorus_r[GRAN_CHORUS_LEN];
+
     GranularPolyVoice voices[GRAN_MAX_VOICES];
     Grain grains[MAX_GRAINS];
 } GranularVoiceState;
 
+/* Control task only: init, set_*, global_sample_set, set_active_slot. */
 void granular_init(void *state, uint32_t sample_rate);
-void granular_note_on(void *state, uint8_t note, uint8_t vel);
-void granular_note_off(void *state, uint8_t note);
 void granular_set_macro(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_space(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_env(void *state, uint8_t knob_idx, int16_t val);
 void granular_set_filter(void *state, uint8_t knob_idx, int16_t val);
-void granular_render_block(void *state, int16_t *out_l, int16_t *out_r, size_t frames);
+/* `buffer` is the flash-mapped SEA5 chunk data of a sample slot (bytes, not
+ * PCM); `length` is the slot's frame count at 32 kHz. Decodes the active slot
+ * into RAM (first 8192 frames). Pass NULL/0 to unbind. */
 void granular_global_sample_set(uint8_t slot, const int16_t *buffer, uint32_t length);
 void granular_set_active_slot(uint8_t slot);
 uint8_t granular_get_active_slot(void);
+
+/* Audio callback only (these run from SRAM and never call into Flash). */
+void granular_note_on(void *state, uint8_t note, uint8_t vel);
+void granular_note_off(void *state, uint8_t note);
+void granular_all_notes_off(void *state); /* release every gated voice */
+void granular_silence(void *state);       /* drop voices and grains at once; keeps parameters */
+int  granular_is_ready(void);             /* a decoded sample is available */
+void granular_render_block(void *state, int16_t *out_l, int16_t *out_r, size_t frames);
 
 #endif

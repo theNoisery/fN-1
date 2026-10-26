@@ -1,7 +1,7 @@
 name: Build FM1 Firmware
 
 on:
-  push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -61,9 +61,11 @@ jobs:
           cmd.exe /c "build.bat --web"
           cmd.exe /c "build.bat --package"
 
+      # Only a build that passed every check in sdk/Build.ps1 (manifest hashes,
+      # SRAM placement of audio code, 1 MiB image fit) is uploaded. Never
+      # flash an artifact from a failed run, and keep stock V15 available.
       - name: Upload Flashable Firmware
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: FM1-Custom-Firmware
           path: |

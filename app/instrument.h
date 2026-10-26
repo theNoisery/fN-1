@@ -23,7 +23,6 @@ enum groove_source {
     GROOVE_PSG,
     GROOVE_PLUCK,
     GROOVE_SAMPLE,
-    GROOVE_GRANULAR, // <--- Add your new engine here
     GROOVE_SOURCES
 };
 /* Type changes belong to control. MIDI channels and mixer settings survive.
