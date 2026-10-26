@@ -51,11 +51,17 @@ jobs:
           FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
           FM1_SOURCE_URL: "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip"
         run: |
-          # Alias powershell to modern pwsh so build.bat doesn't call legacy Windows PowerShell
-          $pwshPath = (Get-Command pwsh).Source
-          Set-Alias -Name powershell -Value $pwshPath -Scope Global -Force
+          # Redirect 'powershell' command in PATH to modern pwsh.exe
+          $pwshDir = Split-Path (Get-Command pwsh).Source
+          $shimDir = "C:\pwsh_shim"
+          New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+          Copy-Item "$pwshDir\pwsh.exe" "$shimDir\powershell.exe" -Force
+          $env:PATH = "$shimDir;$env:PATH"
 
-          # Run build.bat through cmd while passing the environment variables
+          # Verify 'powershell' now points to modern pwsh and has Get-FileHash
+          powershell -Command "Get-Command Get-FileHash"
+
+          # Run build.bat through cmd
           cmd.exe /c "build.bat --package"
 
       - name: Upload Flashable Firmware
