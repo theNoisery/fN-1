@@ -10,6 +10,9 @@
 
 #include "sample_metadata.inc"
 
+/* Declare sample decoding quantization table provided by SDK/firmware context */
+extern const int16_t sample_dqt[];
+
 static int16_t hann_window[1024];
 static int hann_initialized = 0;
 
