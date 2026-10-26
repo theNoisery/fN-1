@@ -365,7 +365,7 @@ $flags = @('-target','pi32v2','-integrated-as','-mcpu=r3','-mfprev1','-Wuninitia
     '-Wno-invalid-noreturn','-fno-common','-flto','-fallow-pointer-null','-fprefer-gnu-section',
     '-femulated-tls','-Wno-shift-negative-value','-Wframe-larger-than=2560','-fms-extensions',
     '-fno-unwind-tables','-ffunction-sections','-fdata-sections','-fmessage-length=0',
-    '-cl-single-precision-constant','-mllvm','-pi32v2-large-program=true','-D__GCC_PI32V2__','-O2')
+    '-cl-single-precision-constant','-mllvm','-pi32v2-large-program=true','-D__GCC_PI32V2__','-Oz')
 foreach ($dir in $include) { $flags += '-I' + (Join-Path $root $dir) }
 $objects = @()
 $commands = @()
