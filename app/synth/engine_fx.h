@@ -15,8 +15,11 @@ enum {
 #define DLY_MAX_SAMPLES 65536 // ~1.48 seconds at 44.1kHz
 
 typedef struct {
-    uint32_t time_l;
-    uint32_t time_r;
+    uint32_t target_time_l;
+    uint32_t target_time_r;
+    int32_t  current_time_l; // Q16 fixed-point for smooth gliding tape speed
+    int32_t  current_time_r;
+    
     uint16_t feedback;  // 0 to 150% (Scaled: 0 to 384)
     uint8_t  mix;       // 0 to 100
     uint8_t  ping_pong; // 0 or 1
@@ -47,7 +50,6 @@ typedef struct {
     uint16_t fdn_lengths[FDN_LINES];
     uint16_t ap_lengths[FDN_LINES];
     
-    // Per-line HF damping filter states for lush, non-metallic tails
     int32_t  fdn_lp[FDN_LINES];
     int32_t  in_lp_l, in_lp_r;
 
