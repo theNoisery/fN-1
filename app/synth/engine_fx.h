@@ -22,6 +22,11 @@ typedef struct {
     uint8_t  ping_pong; // 0 or 1
     int8_t   lr_diff;   // -50% to +50% L/R time offset
     
+    // Tape warmth low-pass & DC blocker states
+    int32_t  lp_l, lp_r;
+    int32_t  dc_in_l, dc_out_l;
+    int32_t  dc_in_r, dc_out_r;
+
     int16_t  buf_l[DLY_MAX_SAMPLES];
     int16_t  buf_r[DLY_MAX_SAMPLES];
     uint32_t write_idx;
@@ -42,6 +47,10 @@ typedef struct {
     uint16_t fdn_lengths[FDN_LINES];
     uint16_t ap_lengths[FDN_LINES];
     
+    // Per-line HF damping filter states for lush, non-metallic tails
+    int32_t  fdn_lp[FDN_LINES];
+    int32_t  in_lp_l, in_lp_r;
+
     int16_t  fdn_buf[FDN_LINES][FDN_MAX_LEN];
     int16_t  ap_buf[FDN_LINES][AP_MAX_LEN];
     
