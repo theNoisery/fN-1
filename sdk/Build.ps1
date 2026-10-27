@@ -224,17 +224,24 @@ function Test-Firmware {
     # Diagnostics only: which link inputs take the most space. Never fails the build.
     try {
         $sizes = @{}
+        $functions = @{}
         $pending = $null
         foreach ($line in ($map -split "`n")) {
             if ($line -cmatch '^ (\.\S+)\s*$') { $pending = $Matches[1]; continue }
-            if ($line -cmatch '^ (?:\.\S+)?\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+(\S.*?)\s*$') {
-                $file = $Matches[2] -replace '^.*[\\/](build[\\/])?',''
-                $sizes[$file] = [int64]$sizes[$file] + [Convert]::ToInt64($Matches[1],16)
+            if ($line -cmatch '^ (\.\S+)?\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+(\S.*?)\s*$') {
+                $name = if ($Matches[1]) { $Matches[1] } else { $pending }
+                $file = $Matches[3] -replace '^.*[\\/](build[\\/])?',''
+                $bytes = [Convert]::ToInt64($Matches[2],16)
+                $sizes[$file] = [int64]$sizes[$file] + $bytes
+                if ($name -and $file -cmatch '^(lto-llvm|\d+_app_)') { $functions[$name + '  ' + $file] = [int64]$functions[$name + '  ' + $file] + $bytes }
             }
             $pending = $null
         }
         Write-Host 'FM1 size by link input (all sections, bytes):'
         $sizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 30 |
+            ForEach-Object { Write-Host ('  {0,8}  {1}' -f $_.Value, $_.Key) }
+        Write-Host 'FM1 size by application section (bytes):'
+        $functions.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 60 |
             ForEach-Object { Write-Host ('  {0,8}  {1}' -f $_.Value, $_.Key) }
     } catch { Write-Host "FM1: size report unavailable: $($_.Exception.Message)" }
 }
