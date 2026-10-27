@@ -4,11 +4,9 @@
 #include "instrument.h"
 #include "sampledrum.h"
 #include "fm_patch.h"
+#include "synth/engine_granular.h"
 #include <string.h>
 
-/* Single bank, no hidden second copy. CRC and a last-written commit word make
- * an interrupted import visibly incomplete. Projects occupy separate sectors.
- * The browser retains/downloads a complete bank before replacing one slot. */
 struct sample_entry {
     uint32_t offset, frames, bytes;
     char name[16];
@@ -23,7 +21,6 @@ static unsigned state, total, position;
 static uint32_t checksum, changed_at;
 static uint32_t crc32(uint32_t crc, unsigned offset, const uint8_t *p, unsigned bytes)
 {
-    /* Treat the stored CRC and commit word as zero, including split writes. */
     static const uint8_t zero[8] = {0};
     if (offset < 12) {
         unsigned n = bytes < 12 - offset ? bytes : 12 - offset;
@@ -43,6 +40,11 @@ static void unbind(void)
     groove_samples_stop();
     for (unsigned i = 0; i < SAMPLE_DRUM_PADS; ++i)
         (void)sampledrum_bind(i, NULL, 0, 0, NULL);
+        
+    for (unsigned i = 0; i < 16; ++i) {
+        granular_global_sample_set(i, NULL, 0);
+    }
+    
     fm1_engine_resume();
 }
 static int valid(void)
@@ -89,6 +91,14 @@ static int bind(void)
         const struct sample_entry *s = &header.entry[i];
         (void)sampledrum_bind(i, s->frames ? mapped + s->offset : NULL, s->bytes, s->frames,
                               s->name);
+    }
+   for (unsigned i = 0; i < 16; ++i) {
+        const struct sample_entry *s = &header.entry[i];
+        if (s->frames) {
+            granular_global_sample_set(i, (const int16_t *)(mapped + s->offset), s->frames);
+        } else {
+            granular_global_sample_set(i, NULL, 0);
+        }
     }
     fm1_engine_resume();
     state = 2;
@@ -156,7 +166,6 @@ int groove_samples_begin(unsigned bytes)
         fm1_flash_size() != GROOVE_FLASH_BYTES)
         return GROOVE_PROJECT_INVALID;
     unbind();
-    /* Erase the commit first, before any old sample bytes can be overwritten. */
     groove_edit_record(0, 0, 0);
     fm1_engine_pause();
     fm1_engine_stop();
@@ -190,7 +199,6 @@ int groove_samples_write(unsigned offset, const uint8_t *data, unsigned bytes)
             if (offset + i >= 16 && offset + i < 20)
                 copy[i] = 255;
     }
-    /* Requests may straddle a sector. Erase only the as-yet-unwritten sector. */
     unsigned first = offset / 4096U, last = (offset + bytes - 1U) / 4096U;
     int r = 0;
     if (offset && !(offset % 4096U))
@@ -213,8 +221,6 @@ int groove_samples_finish(void)
     if (state != 3 || position != total || header.bytes != total || !valid() ||
         ~checksum != header.crc)
         return GROOVE_PROJECT_INVALID;
-    /* Validate codec headers before committing, including data just written
-     * through the raw Flash API and not yet visible in the mapped cache. */
     int r = fm1_flash_invalidate(GROOVE_SAMPLE_OFFSET, total);
     if (!r && !mapped_data())
         r = GROOVE_PROJECT_INVALID;

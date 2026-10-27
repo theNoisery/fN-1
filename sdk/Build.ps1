@@ -369,8 +369,13 @@ $variantName = 'release'
 $variant = [pscustomobject]@{user_bytes=536576; frozen='sdk/lib/libfm1_engine.a'; update_family=7}
 $include = @('sdk/include','sdk/include/libc','app/synth','sdk/config','app','app/board')
 $sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'app') -Recurse -File |
-    Where-Object { $_.Extension -in @('.c','.S') -and !$_.FullName.StartsWith(([IO.Path]::GetFullPath((Join-Path $root 'app/synth'))+'\'),[StringComparison]::OrdinalIgnoreCase) } | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($root.Length+1).Replace('\','/') })
-$extra = @('groove_sequence_render','groove_sequence_clock','groove_sequence_position','groove_sequence_transport','fm1_sea_decode_groups','fm1_codec_sea_mono_s16_run') + @($synth.sram_required) + @(
+    Where-Object {
+        $_.Extension -in @('.c','.S') -and (
+            !$_.FullName.StartsWith(([IO.Path]::GetFullPath((Join-Path $root 'app/synth'))+'\'),[StringComparison]::OrdinalIgnoreCase) -or
+            $_.Name -eq 'engine_granular.c'
+        )
+    } | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($root.Length+1).Replace('\','/') })
+$extra = @('granular_bridge_render','granular_render_block','granular_note_on','granular_note_off','granular_all_notes_off','granular_silence','granular_is_ready','groove_sequence_render','groove_sequence_clock','groove_sequence_position','groove_sequence_transport','fm1_sea_decode_groups','fm1_codec_sea_mono_s16_run') + @($synth.sram_required) + @(
     'synth_dx7_render','synth_dx7_midi','synth_dx7_key','fm1_dx7_panic','fm_exp2_fixed','bass303_bank_render','bass303_bank_key','bass303_bank_set','drum808_kit_render','drum808_kit_trigger','psg_render','psg_key','psg_midi','psg_panic','psg_set','psg_get','pluck_render','pluck_key','pluck_midi','pluck_panic','pluck_set','pluck_get','fm1_mix128','fm1_mix_mono_stereo128','fm1_bus_output128','fm1_master_mix128','fm1_master_gain','fm1_declick128','fm1_render_begin','fm1_render_end','synth_dx7_active','bass303_bank_active','drum808_kit_active','psg_active','pluck_active','sampledrum_active','synth_dx7_limit','psg_limit','pluck_limit','sampledrum_limit','bass303_advance_idle','fm1_send128','fm1_fx_render','fm1_fx_clear','fm1_fx_active','sampledrum_render','sampledrum_trigger','sampledrum_panic','psg_active_chips')
 [IO.Directory]::CreateDirectory((Join-Path $build 'obj')) | Out-Null
 [IO.Directory]::CreateDirectory((Join-Path $build 'generated')) | Out-Null
@@ -396,9 +401,13 @@ try {
         $options = @($flags)
         # This PI32 LTO plugin can discard application definitions when a
         # native SDK object has weak defaults. Keep user entry units native.
-        if ($source -in @('app/screen.c','app/transfer.c','app/midi_router.c')) {
+        if ($source -in @('app/screen.c','app/transfer.c','app/midi_router.c','app/granular_bridge.c','app/synth/engine_granular.c')) {
             $options += '-fno-lto'
         }
+        # Loop unrolling roughly doubles the granular DSP code (measured on a
+        # comparable ISA) and the image is size-limited. -fno-lto makes the
+        # flag effective: LTO would run its own unroller at link time.
+        if ($source -in @('app/granular_bridge.c','app/synth/engine_granular.c')) { $options += '-fno-unroll-loops' }
         if ($source -eq 'app/board/panel.c') { $options += @('-fno-lto','-fno-pic') }
         $options += @('-fwrapv','-fno-fast-math','-ffp-contract=off')
         # Storage and screen run only from control; keep audio DSP on O2.

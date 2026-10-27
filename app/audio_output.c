@@ -2,12 +2,20 @@
 #include "audio_output.h"
 #include "fm1_engine_control.h"
 #include "fm1_audio_io.h"
+#include "granular_bridge.h"
 
 static unsigned output_gain;
 static int32_t usb_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 static int16_t bluetooth_pcm[FM1_BLOCK_WORDS] __attribute__((aligned(32)));
 
-void fm1_output_reset(void) { output_gain = 0; }
+/* May run in any context: the granular bridge only sets a flag here and the
+ * audio callback acts on it. Nothing in this function touches Flash or RAM
+ * owned by the other side. */
+void fm1_output_reset(void)
+{
+    output_gain = 0;
+    granular_bridge_request_reset();
+}
 static inline __attribute__((always_inline)) int32_t limit(int64_t value)
 {
     /* Bias signed 24-bit PCM into [0, 2^24). Unsigned arithmetic also
@@ -28,12 +36,17 @@ FM1_AUDIO_CODE void fm1_output_mix(int32_t *output)
     int usb_frames = fm1_usb_audio_read(usb_pcm, FM1_BLOCK_FRAMES, usb_gain);
     unsigned left = ((unsigned)usb_gain[0] * output_gain) >> 7;
     unsigned right = ((unsigned)usb_gain[1] * output_gain) >> 7;
+    /* Granular overlay (NULL unless a track carries it); already Q23 and
+     * scaled by its track volume. */
+    const int32_t *granular = granular_bridge_render();
     /* Accumulate USB before clipping, then add Bluetooth.
      * Discard the block if the USB stream resets. */
     for (unsigned i = 0; i < FM1_BLOCK_WORDS; ++i) {
         int64_t value = ((int64_t)output[i] * output_gain) >> 7;
         if (usb_frames == FM1_BLOCK_FRAMES)
             value += ((int64_t)usb_pcm[i] * ((i & 1U) ? right : left)) >> 7;
+        if (granular)
+            value += ((int64_t)granular[i] * output_gain) >> 7;
         output[i] = usb_frames == -2 ? 0 : limit(value);
     }
     if (fm1_bluetooth_audio_read(bluetooth_pcm, FM1_BLOCK_FRAMES) == FM1_BLOCK_FRAMES) {
