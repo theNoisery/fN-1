@@ -13,6 +13,10 @@
 
 /* Keeps the optimizer from rewriting a zeroing loop into a memset() call. In
  * audio code memset/memcpy are Flash calls (see sdk/include/fm1.h). */
+/* The build verifies these entry points by symbol name and SRAM address, so
+ * LTO must neither inline nor drop them (same attributes as FM1_AUDIO_CODE). */
+#define GRAN_ENTRY __attribute__((noinline, used))
+
 #define GRAN_NO_IDIOM() __asm__ volatile("" ::: "memory")
 
 /* The board renders at 44.1 kHz (sdk/synth.json) but sample banks are stored

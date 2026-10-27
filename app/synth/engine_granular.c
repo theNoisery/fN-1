@@ -240,7 +240,7 @@ static FM1_DSP_CODE uint32_t note_to_speed(uint8_t note) {
     return base_speed;
 }
 
-void FM1_DSP_CODE granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
+void FM1_DSP_CODE GRAN_ENTRY granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
     (void)vel;
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     state->voice_age_counter++;
@@ -308,7 +308,7 @@ void FM1_DSP_CODE granular_note_on(void *state_ptr, uint8_t note, uint8_t vel) {
     v->age = state->voice_age_counter;
 }
 
-void FM1_DSP_CODE granular_note_off(void *state_ptr, uint8_t note) {
+void FM1_DSP_CODE GRAN_ENTRY granular_note_off(void *state_ptr, uint8_t note) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     for (int i = 0; i < GRAN_MAX_VOICES; i++) {
         if (state->voices[i].active && state->voices[i].note == note) {
@@ -320,7 +320,7 @@ void FM1_DSP_CODE granular_note_off(void *state_ptr, uint8_t note) {
     }
 }
 
-void FM1_DSP_CODE granular_all_notes_off(void *state_ptr) {
+void FM1_DSP_CODE GRAN_ENTRY granular_all_notes_off(void *state_ptr) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     for (int i = 0; i < GRAN_MAX_VOICES; i++) {
         if (state->voices[i].active) {
@@ -332,7 +332,7 @@ void FM1_DSP_CODE granular_all_notes_off(void *state_ptr) {
     }
 }
 
-void FM1_DSP_CODE granular_silence(void *state_ptr) {
+void FM1_DSP_CODE GRAN_ENTRY granular_silence(void *state_ptr) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     for (int i = 0; i < GRAN_MAX_VOICES; i++) {
         GranularPolyVoice *v = &state->voices[i];
@@ -350,7 +350,7 @@ void FM1_DSP_CODE granular_silence(void *state_ptr) {
     }
 }
 
-int FM1_DSP_CODE granular_is_ready(void) {
+int FM1_DSP_CODE GRAN_ENTRY granular_is_ready(void) {
     return decoded_length >= 64U;
 }
 
@@ -418,7 +418,7 @@ static FM1_DSP_CODE void spawn_single_grain(GranularVoiceState *state, uint8_t v
     }
 }
 
-void FM1_DSP_CODE granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
+void FM1_DSP_CODE GRAN_ENTRY granular_render_block(void *state_ptr, int16_t *out_l, int16_t *out_r, size_t frames) {
     GranularVoiceState *state = (GranularVoiceState *)state_ptr;
     const uint32_t dlen = decoded_length;
 
