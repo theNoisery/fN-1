@@ -72,3 +72,13 @@ jobs:
             build/official-web/FM1-Official-Open-Source.html
             build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
             build/**/*.fwsc
+
+      # Link map and size report for diagnosing failed builds. Not firmware.
+      - name: Upload build diagnostics
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: FM1-Build-Diagnostics
+          path: |
+            build/dx7/sdk.map
+            build/dx7/firmware-report.json

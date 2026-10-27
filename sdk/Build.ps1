@@ -221,6 +221,22 @@ function Test-Firmware {
         application_callbacks_verified=$true; board_validation='not performed'}
     Write-Text $report ($result | ConvertTo-Json -Depth 6)
     Write-Host "FM1: $appImage bytes app image; SRAM/BLE/USB checks passed"
+    # Diagnostics only: which link inputs take the most space. Never fails the build.
+    try {
+        $sizes = @{}
+        $pending = $null
+        foreach ($line in ($map -split "`n")) {
+            if ($line -cmatch '^ (\.\S+)\s*$') { $pending = $Matches[1]; continue }
+            if ($line -cmatch '^ (?:\.\S+)?\s+0x[0-9a-f]+\s+0x([0-9a-f]+)\s+(\S.*?)\s*$') {
+                $file = $Matches[2] -replace '^.*[\\/](build[\\/])?',''
+                $sizes[$file] = [int64]$sizes[$file] + [Convert]::ToInt64($Matches[1],16)
+            }
+            $pending = $null
+        }
+        Write-Host 'FM1 size by link input (all sections, bytes):'
+        $sizes.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 30 |
+            ForEach-Object { Write-Host ('  {0,8}  {1}' -f $_.Value, $_.Key) }
+    } catch { Write-Host "FM1: size report unavailable: $($_.Exception.Message)" }
 }
 
 function Package-Firmware {
