@@ -1,0 +1,84 @@
+name: Build FM1 Firmware
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and Setup JieLi Toolchain 2.5.3
+        shell: pwsh
+        run: |
+          Write-Host "Downloading JieLi Toolchain 2.5.3..."
+          curl.exe -L --retry 3 "https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe" -o jl_installer.exe
+
+          Write-Host "Extracting installer archive..."
+          choco install innoextract -y --no-progress | Out-Null
+
+          New-Item -ItemType Directory -Force -Path "C:\JL_temp" | Out-Null
+          
+          # Extract with 7z and innoextract
+          7z x jl_installer.exe -o"C:\JL_temp\7z" -y | Out-Null
+          & innoextract -d "C:\JL_temp\inno" jl_installer.exe | Out-Null
+
+          # Search for clang.exe in extraction
+          $foundClang = Get-ChildItem -Path "C:\JL_temp" -Filter "clang.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($foundClang) {
+            $pi32Folder = $foundClang.Directory.Parent.FullName
+            Write-Host "Found toolchain at: $pi32Folder"
+            New-Item -ItemType Directory -Force -Path "C:\JL" | Out-Null
+            Copy-Item -Path $pi32Folder -Destination "C:\JL\pi32" -Recurse -Force
+          } else {
+            throw "Could not locate clang.exe in extracted archive files."
+          }
+
+          if (!(Test-Path "C:\JL\pi32\bin\clang.exe")) {
+            throw "Failed to locate C:\JL\pi32\bin\clang.exe."
+          }
+
+          $hash = (Get-FileHash -Path "C:\JL\pi32\bin\clang.exe" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Toolchain clang.exe SHA-256: $hash"
+
+      - name: Build Firmware and Web Installer
+        shell: pwsh
+        env:
+          FM1_PI32_TOOLCHAIN: 'C:\JL\pi32'
+          FM1_SOURCE_URL: "https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip"
+        run: |
+          # Replace 'powershell' with 'pwsh' inside build.bat so it uses PowerShell 7 natively
+          (Get-Content .\build.bat) -replace 'powershell(?:\.exe)?', 'pwsh' | Set-Content .\build.bat
+
+          # Generate asset include files (sample_metadata.inc, etc.) first
+          pwsh -File .\tools\Build-Web.ps1 -LocalPreview
+
+          # Run build.bat to package the hardware firmware
+          cmd.exe /c "build.bat --web"
+          cmd.exe /c "build.bat --package"
+
+      # Only a build that passed every check in sdk/Build.ps1 (manifest hashes,
+      # SRAM placement of audio code, 1 MiB image fit) is uploaded. Never
+      # flash an artifact from a failed run, and keep stock V15 available.
+      - name: Upload Flashable Firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM1-Custom-Firmware
+          path: |
+            build/official-web/FM1-Official-Open-Source.html
+            build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc
+            build/**/*.fwsc
+
+      # Link map and size report for diagnosing failed builds. Not firmware.
+      - name: Upload build diagnostics
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: FM1-Build-Diagnostics
+          path: |
+            build/dx7/sdk.map
+            build/dx7/firmware-report.json

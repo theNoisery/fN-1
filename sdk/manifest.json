@@ -4,7 +4,7 @@
     "toolchain":  "JieLi Windows 2.5.3 (PI32v2 clang 4.0.1 r3)",
     "library_format":  "Native archives: ELF32 PI32v2, no LLVM bitcode or DWARF.",
     "files":  {
-                  "sdk/Build.ps1":  "cd941fe58ac5203b19b64dd0c9d050aca282af601426b34c498f0a8c55ef0b45",
+                  "sdk/Build.ps1":  "9afeeb1b91fcdb26e3d254b660f0bd9638c6cd1c2fc5a3f63e50012e31a70fff",
                   "sdk/I18n.js":  "e5e980299862f3b833c9534f4b6d7e9fab91768b61433df6ec34d9f66f31d46e",
                   "sdk/Package.cs":  "1073026536b64f0d90a60f1a4229703a7fd8d2eaefee2310d8161a4dabdbe2dd",
                   "sdk/Samples.js":  "2bc3e5b6cbb7d5ddc01f22389ce034a1abed4f78e2ea5a1c6cd2fc925a68fc2b",
