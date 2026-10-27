@@ -401,9 +401,13 @@ try {
         $options = @($flags)
         # This PI32 LTO plugin can discard application definitions when a
         # native SDK object has weak defaults. Keep user entry units native.
-        if ($source -in @('app/screen.c','app/transfer.c','app/midi_router.c')) {
+        if ($source -in @('app/screen.c','app/transfer.c','app/midi_router.c','app/granular_bridge.c','app/synth/engine_granular.c')) {
             $options += '-fno-lto'
         }
+        # Loop unrolling roughly doubles the granular DSP code (measured on a
+        # comparable ISA) and the image is size-limited. -fno-lto makes the
+        # flag effective: LTO would run its own unroller at link time.
+        if ($source -in @('app/granular_bridge.c','app/synth/engine_granular.c')) { $options += '-fno-unroll-loops' }
         if ($source -eq 'app/board/panel.c') { $options += @('-fno-lto','-fno-pic') }
         $options += @('-fwrapv','-fno-fast-math','-ffp-contract=off')
         # Storage and screen run only from control; keep audio DSP on O2.
